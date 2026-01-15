@@ -1,17 +1,16 @@
 import { inngest } from './inngest';
 import { Nango } from '@nangohq/node';
-import { createClient } from '@supabase/supabase-js';
+import { supabaseAdmin } from './supabase-server';
+import { scanContent } from './nightfall';
+import { upsertPiiVaultTokens } from './pii-vault';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 // Initialize Nango client
 const nango = new Nango({
   secretKey: process.env.NANGO_SECRET_KEY!,
 });
 
-// Supabase admin client (service role)
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supa = supabaseAdmin as unknown as SupabaseClient;
 
 interface GmailHeader {
   name: string;
@@ -66,7 +65,7 @@ export const processGmailConnection = inngest.createFunction(
     const nangoConnectionId = connectionId || userId;
 
     await step.run('update-status-fetching', async () => {
-      const { error } = await supabaseAdmin
+      const { error } = await supa
         .from('sync_status')
         .upsert(
           { user_id: userId, status: 'fetching', updated_at: new Date().toISOString() },
@@ -120,7 +119,7 @@ export const processGmailConnection = inngest.createFunction(
     });
 
     await step.run('update-status-securing', async () => {
-      const { error } = await supabaseAdmin
+      const { error } = await supa
         .from('sync_status')
         .upsert(
           { user_id: userId, status: 'securing', updated_at: new Date().toISOString() },
@@ -129,10 +128,21 @@ export const processGmailConnection = inngest.createFunction(
       if (error) throw error;
     });
 
-    await step.sleep('mock-dlp-scan', '2s');
+    await step.run('nightfall-dlp-scan', async () => {
+      // Scan and tokenize the fields we will store
+      for (const email of emails) {
+        const scanned = await scanContent(`${email.from}\n${email.subject}`);
+        await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
+
+        // Replace stored fields with tokenized versions
+        const [fromLine, ...subjectLines] = scanned.redacted.split('\n');
+        email.from = fromLine || email.from;
+        email.subject = subjectLines.join('\n') || email.subject;
+      }
+    });
 
     await step.run('persist-emails', async () => {
-      const { error: deleteError } = await supabaseAdmin.from('emails').delete().eq('user_id', userId);
+      const { error: deleteError } = await supa.from('emails').delete().eq('user_id', userId);
       if (deleteError) console.error('Failed to delete existing emails', deleteError);
 
       if (emails.length > 0) {
@@ -145,13 +155,13 @@ export const processGmailConnection = inngest.createFunction(
           security_verified: true,
         }));
 
-        const { error: insertError } = await supabaseAdmin.from('emails').insert(rows);
+        const { error: insertError } = await supa.from('emails').insert(rows);
         if (insertError) throw insertError;
       }
     });
 
     await step.run('update-status-complete', async () => {
-      const { error } = await supabaseAdmin
+      const { error } = await supa
         .from('sync_status')
         .upsert(
           { user_id: userId, status: 'complete', updated_at: new Date().toISOString() },
@@ -180,7 +190,7 @@ export const syncCalendarEvents = inngest.createFunction(
     const nangoConnectionId = connectionId || userId;
 
     await step.run('update-status-fetching-calendar', async () => {
-      const { error } = await supabaseAdmin
+      const { error } = await supa
         .from('sync_status')
         .upsert(
           {
@@ -229,7 +239,7 @@ export const syncCalendarEvents = inngest.createFunction(
     });
 
     await step.run('update-status-securing-calendar', async () => {
-      const { error } = await supabaseAdmin
+      const { error } = await supa
         .from('sync_status')
         .upsert(
           {
@@ -243,7 +253,16 @@ export const syncCalendarEvents = inngest.createFunction(
       if (error) throw error;
     });
 
-    await step.sleep('mock-calendar-dlp', '2s');
+    await step.run('nightfall-dlp-scan-calendar', async () => {
+      for (const ev of events) {
+        const scanned = await scanContent(`${ev.title}\n${ev.location || ''}`);
+        await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
+        const [titleLine, ...locLines] = scanned.redacted.split('\n');
+        ev.title = titleLine || ev.title;
+        const loc = locLines.join('\n').trim();
+        ev.location = loc || ev.location;
+      }
+    });
 
     await step.run('persist-calendar-events', async () => {
       if (events.length > 0) {
@@ -261,7 +280,7 @@ export const syncCalendarEvents = inngest.createFunction(
           conflict_with: [],
         }));
 
-        const { error: upsertError } = await supabaseAdmin
+        const { error: upsertError } = await supa
           .from('calendar_events')
           .upsert(rows, { onConflict: 'user_id,event_id' });
         if (upsertError) throw upsertError;
@@ -289,7 +308,7 @@ export const syncCalendarEvents = inngest.createFunction(
       }
 
       for (const [eventId, overlapIds] of Object.entries(conflicts)) {
-        const { error } = await supabaseAdmin
+        const { error } = await supa
           .from('calendar_events')
           .update({
             has_conflict: overlapIds.length > 0,
@@ -302,7 +321,7 @@ export const syncCalendarEvents = inngest.createFunction(
     });
 
     await step.run('update-status-complete-calendar', async () => {
-      const { error } = await supabaseAdmin
+      const { error } = await supa
         .from('sync_status')
         .upsert(
           {
@@ -336,7 +355,7 @@ export const syncDriveDocuments = inngest.createFunction(
     const nangoConnectionId = connectionId || userId;
 
     await step.run('update-status-fetching-drive', async () => {
-      const { error } = await supabaseAdmin
+      const { error } = await supa
         .from('sync_status')
         .upsert(
           {
@@ -370,7 +389,7 @@ export const syncDriveDocuments = inngest.createFunction(
     });
 
     await step.run('update-status-securing-drive', async () => {
-      const { error } = await supabaseAdmin
+      const { error } = await supa
         .from('sync_status')
         .upsert(
           {
@@ -384,7 +403,13 @@ export const syncDriveDocuments = inngest.createFunction(
       if (error) throw error;
     });
 
-    await step.sleep('mock-drive-dlp', '2s');
+    await step.run('nightfall-dlp-scan-drive', async () => {
+      for (const f of files) {
+        const scanned = await scanContent(f.name);
+        await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
+        f.name = scanned.redacted;
+      }
+    });
 
     await step.run('persist-drive-documents', async () => {
       const rows = files.map((f) => ({
@@ -400,7 +425,7 @@ export const syncDriveDocuments = inngest.createFunction(
       }));
 
       if (rows.length > 0) {
-        const { error } = await supabaseAdmin
+        const { error } = await supa
           .from('drive_documents')
           .upsert(rows, { onConflict: 'user_id,document_id' });
         if (error) throw error;
@@ -408,7 +433,7 @@ export const syncDriveDocuments = inngest.createFunction(
     });
 
     await step.run('update-status-complete-drive', async () => {
-      const { error } = await supabaseAdmin
+      const { error } = await supa
         .from('sync_status')
         .upsert(
           {

@@ -3,6 +3,8 @@ import { auth } from '@clerk/nextjs/server';
 import { supabaseAdmin } from '@/lib/supabase-server';
 import { Nango } from '@nangohq/node';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { scanContent } from '@/lib/nightfall';
+import { upsertPiiVaultTokens } from '@/lib/pii-vault';
 
 export async function GET() {
   const { userId } = await auth();
@@ -105,17 +107,25 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Failed to create event' }, { status: 500 });
     }
 
+    // Nightfall DLP gate before storage (store tokenized fields; do NOT affect Google event)
+    const scanned = await scanContent(`${body.title}\n${body.description || ''}\n${body.location || ''}`);
+    await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
+    const [titleLine, descLine, ...rest] = scanned.redacted.split('\n');
+    const redactedTitle = titleLine || body.title;
+    const redactedDescription = descLine || body.description;
+    const redactedLocation = rest.join('\n').trim() || body.location;
+
     // Persist to Supabase for UI
     const { error: upsertError } = await supa.from('calendar_events').upsert(
       {
         user_id: userId,
         event_id: created.id,
         calendar_id: 'primary',
-        title: body.title,
-        description: body.description,
+        title: redactedTitle,
+        description: redactedDescription,
         start_time: body.start_time,
         end_time: body.end_time,
-        location: body.location,
+        location: redactedLocation,
         attendees: [],
         is_all_day: false,
         status: 'confirmed',

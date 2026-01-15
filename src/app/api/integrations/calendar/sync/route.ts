@@ -5,6 +5,26 @@ import { supabaseAdmin } from '@/lib/supabase-server';
 import type { Database } from '@/types';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { Nango } from '@nangohq/node';
+import { scanContent } from '@/lib/nightfall';
+import { upsertPiiVaultTokens } from '@/lib/pii-vault';
+
+function getDlpConfigIssue(): string | null {
+  if (!process.env.NIGHTFALL_API_KEY) return 'Missing NIGHTFALL_API_KEY on server (DLP gate required)';
+  const keyB64 = process.env.PII_VAULT_KEY_BASE64;
+  if (!keyB64) return 'Missing PII_VAULT_KEY_BASE64 on server (PII vault encryption key required)';
+  const key = Buffer.from(keyB64, 'base64');
+  if (key.length !== 32) return 'PII_VAULT_KEY_BASE64 must decode to 32 bytes (AES-256 key)';
+  return null;
+}
+
+function parseProxyData(data: unknown): unknown {
+  if (typeof data !== 'string') return data;
+  try {
+    return JSON.parse(data) as unknown;
+  } catch {
+    return data;
+  }
+}
 
 export async function POST() {
   try {
@@ -126,7 +146,68 @@ export async function POST() {
       attendees?: unknown[];
     };
 
-    const items: GoogleCalendarApiEvent[] = response.data?.items || [];
+    const parsed = parseProxyData(response.data) as { items?: unknown[] } | string | undefined;
+    const primaryItems = typeof parsed === 'object' && parsed && Array.isArray(parsed.items)
+      ? (parsed.items as GoogleCalendarApiEvent[])
+      : [];
+
+    let items: GoogleCalendarApiEvent[] = primaryItems;
+    // Fallback: if primary is empty, attempt other visible calendars (helps when events live in a secondary calendar)
+    if (items.length === 0) {
+      try {
+        const nango = new Nango({ secretKey: nangoSecretKey });
+        const timeMin = new Date().toISOString();
+        const timeMax = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+        const calListRes = await nango.proxy({
+          connectionId,
+          providerConfigKey: 'google-calendar',
+          method: 'GET',
+          endpoint: '/calendar/v3/users/me/calendarList',
+          params: { maxResults: '50' },
+        });
+
+        const calListParsed = parseProxyData(calListRes.data) as { items?: unknown[] } | string | undefined;
+        const calendars =
+          typeof calListParsed === 'object' && calListParsed && Array.isArray(calListParsed.items)
+            ? (calListParsed.items as Array<{ id?: string; selected?: boolean; primary?: boolean }>)
+            : [];
+
+        const candidates = calendars
+          .filter((c) => Boolean(c?.id))
+          .sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0))
+          .slice(0, 5);
+
+        for (const cal of candidates) {
+          const calId = String(cal.id);
+          const evRes = await nango.proxy({
+            connectionId,
+            providerConfigKey: 'google-calendar',
+            method: 'GET',
+            endpoint: `/calendar/v3/calendars/${encodeURIComponent(calId)}/events`,
+            params: {
+              singleEvents: 'true',
+              orderBy: 'startTime',
+              timeMin,
+              timeMax,
+              maxResults: '50',
+            },
+          });
+          const evParsed = parseProxyData(evRes.data) as { items?: unknown[] } | string | undefined;
+          const evItems =
+            typeof evParsed === 'object' && evParsed && Array.isArray(evParsed.items)
+              ? (evParsed.items as GoogleCalendarApiEvent[])
+              : [];
+          if (evItems.length > 0) {
+            items = evItems;
+            break;
+          }
+        }
+      } catch (fallbackError) {
+        console.error('Calendar fallback calendarList scan failed', fallbackError);
+      }
+    }
+
     type CalendarEventInsert = Database['public']['Tables']['calendar_events']['Insert'];
 
     const events = items.map((item) => {
@@ -150,6 +231,35 @@ export async function POST() {
     }) as CalendarEventInsert[];
 
     if (events.length > 0) {
+      const dlpIssue = getDlpConfigIssue();
+      if (dlpIssue) {
+        return NextResponse.json({
+          success: true,
+          eventsSynced: 0,
+          warning: dlpIssue,
+        });
+      }
+
+      // Nightfall DLP gate before storage
+      try {
+        for (const ev of events) {
+          const scanned = await scanContent(`${ev.title}\n${ev.location || ''}`);
+          await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
+          const [titleLine, ...locLines] = scanned.redacted.split('\n');
+          ev.title = titleLine || ev.title;
+          const loc = locLines.join('\n').trim();
+          ev.location = loc || ev.location;
+        }
+      } catch (dlpError) {
+        const details = dlpError instanceof Error ? dlpError.message : 'Unknown DLP error';
+        console.error('Calendar DLP gate failed', dlpError);
+        return NextResponse.json({
+          success: true,
+          eventsSynced: 0,
+          warning: `Calendar data was NOT stored because DLP failed: ${details}`,
+        });
+      }
+
       const { error: upsertError } = await supa
         .from('calendar_events')
         .upsert(events, { onConflict: 'user_id,event_id' });
@@ -199,7 +309,11 @@ export async function POST() {
       }
     }
 
-    return NextResponse.json({ success: true, eventsSynced: events.length });
+    return NextResponse.json({
+      success: true,
+      eventsSynced: events.length,
+      fetchedEvents: items.length,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('Calendar sync trigger failed', error);

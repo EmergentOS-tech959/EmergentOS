@@ -9,6 +9,15 @@ type GoogleDriveFolder = {
   name: string;
 };
 
+function parseProxyData(data: unknown): unknown {
+  if (typeof data !== 'string') return data;
+  try {
+    return JSON.parse(data) as unknown;
+  } catch {
+    return data;
+  }
+}
+
 export async function GET() {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -55,7 +64,8 @@ export async function GET() {
     },
   });
 
-  const files = (response.data?.files || []) as unknown[];
+  const parsed = parseProxyData(response.data) as { files?: unknown[] } | string | undefined;
+  const files = (typeof parsed === 'object' && parsed && Array.isArray(parsed.files) ? parsed.files : []) as unknown[];
   const folders: GoogleDriveFolder[] = files.map((f) => {
     const file = f as { id?: unknown; name?: unknown };
     return {

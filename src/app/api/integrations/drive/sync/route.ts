@@ -4,6 +4,8 @@ import { inngest } from '@/lib/inngest';
 import { supabaseAdmin } from '@/lib/supabase-server';
 import { Nango } from '@nangohq/node';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { scanContent } from '@/lib/nightfall';
+import { upsertPiiVaultTokens } from '@/lib/pii-vault';
 
 type GoogleDriveFile = {
   id: string;
@@ -14,6 +16,24 @@ type GoogleDriveFile = {
   parents?: string[];
   md5Checksum?: string;
 };
+
+function parseProxyData(data: unknown): unknown {
+  if (typeof data !== 'string') return data;
+  try {
+    return JSON.parse(data) as unknown;
+  } catch {
+    return data;
+  }
+}
+
+function getDlpConfigIssue(): string | null {
+  if (!process.env.NIGHTFALL_API_KEY) return 'Missing NIGHTFALL_API_KEY on server (DLP gate required)';
+  const keyB64 = process.env.PII_VAULT_KEY_BASE64;
+  if (!keyB64) return 'Missing PII_VAULT_KEY_BASE64 on server (PII vault encryption key required)';
+  const key = Buffer.from(keyB64, 'base64');
+  if (key.length !== 32) return 'PII_VAULT_KEY_BASE64 must decode to 32 bytes (AES-256 key)';
+  return null;
+}
 
 export async function POST() {
   try {
@@ -75,19 +95,31 @@ export async function POST() {
     const nango = new Nango({ secretKey: nangoSecretKey });
     const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
-    const response = await nango.proxy({
-      connectionId: String(connectionId),
-      providerConfigKey: 'google-drive',
-      method: 'GET',
-      endpoint: '/drive/v3/files',
-      params: {
-        q: `modifiedTime > '${since}' and trashed = false`,
-        pageSize: '50',
-        fields: 'files(id,name,mimeType,modifiedTime,webViewLink,parents,md5Checksum)',
-      },
-    });
+    let response;
+    try {
+      response = await nango.proxy({
+        connectionId: String(connectionId),
+        providerConfigKey: 'google-drive',
+        method: 'GET',
+        endpoint: '/drive/v3/files',
+        params: {
+          q: `modifiedTime > '${since}' and trashed = false`,
+          pageSize: '50',
+          fields: 'files(id,name,mimeType,modifiedTime,webViewLink,parents,md5Checksum)',
+        },
+      });
+    } catch (nangoError) {
+      console.error('Nango drive sync failed', nangoError);
+      return NextResponse.json({
+        success: true,
+        documentsSynced: 0,
+        warning: 'Drive sync could not reach Nango. Ensure the Drive connection is active.',
+      });
+    }
 
-    const files: GoogleDriveFile[] = response.data?.files || [];
+    const parsed = parseProxyData(response.data) as { files?: unknown[] } | string | undefined;
+    const files: GoogleDriveFile[] =
+      typeof parsed === 'object' && parsed && Array.isArray(parsed.files) ? (parsed.files as GoogleDriveFile[]) : [];
     const rows = files.map((f) => ({
       user_id: userId,
       document_id: f.id,
@@ -101,6 +133,32 @@ export async function POST() {
     }));
 
     if (rows.length > 0) {
+      const dlpIssue = getDlpConfigIssue();
+      if (dlpIssue) {
+        return NextResponse.json({
+          success: true,
+          documentsSynced: 0,
+          warning: dlpIssue,
+        });
+      }
+
+      // Nightfall DLP gate before storage
+      try {
+        for (const r of rows) {
+          const scanned = await scanContent(r.name);
+          await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
+          r.name = scanned.redacted;
+        }
+      } catch (dlpError) {
+        const details = dlpError instanceof Error ? dlpError.message : 'Unknown DLP error';
+        console.error('Drive DLP gate failed', dlpError);
+        return NextResponse.json({
+          success: true,
+          documentsSynced: 0,
+          warning: `Drive data was NOT stored because DLP failed: ${details}`,
+        });
+      }
+
       const { error } = await supa.from('drive_documents').upsert(rows, { onConflict: 'user_id,document_id' });
       if (error) console.error('Drive upsert error', error);
     }

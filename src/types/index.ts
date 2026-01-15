@@ -65,6 +65,17 @@ export interface DriveDocument {
 }
 
 /**
+ * PII vault token mapping
+ */
+export interface PiiVaultEntry {
+  id: string;
+  user_id: string;
+  token: string;
+  original_value: string;
+  entity_type: string;
+  created_at: string;
+}
+/**
  * AI-generated daily briefing
  */
 export interface Briefing {
@@ -189,6 +200,11 @@ export interface Database {
         Row: DriveDocument;
         Insert: Omit<DriveDocument, 'id' | 'created_at'>;
         Update: Partial<Omit<DriveDocument, 'id' | 'created_at'>>;
+      };
+      pii_vault: {
+        Row: PiiVaultEntry;
+        Insert: Omit<PiiVaultEntry, 'id' | 'created_at'>;
+        Update: Partial<Omit<PiiVaultEntry, 'id' | 'created_at'>>;
       };
       briefings: {
         Row: Briefing;
