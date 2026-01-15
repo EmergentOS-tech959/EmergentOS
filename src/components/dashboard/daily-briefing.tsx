@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { RefreshCw, Sparkles, ArrowRight, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { supabase } from '@/lib/supabase-client';
 import { toast } from 'sonner';
 
 interface Briefing {
@@ -33,16 +32,11 @@ export function DailyBriefingWidget() {
       if (!user?.id) return;
       setIsLoading(true);
       const today = new Date().toISOString().split('T')[0];
-      
-      const { data, error } = await supabase
-        .from('briefings')
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('briefing_date', today)
-        .maybeSingle();
 
-      if (error) throw error;
-      setBriefing(data);
+      const res = await fetch(`/api/ai/briefing/${today}`, { method: 'GET' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || 'Failed to fetch briefing');
+      setBriefing((body?.briefing as Briefing | null) || null);
     } catch (error) {
       console.error('Error fetching briefing:', error);
     } finally {
@@ -65,20 +59,40 @@ export function DailyBriefingWidget() {
       // Trigger briefing generation via API
       const response = await fetch('/api/ai/briefing/generate', { method: 'POST' });
       
-      if (!response.ok) throw new Error('Failed to generate briefing');
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        toast.success('Briefing updated');
-        void fetchBriefing();
-      } else {
-        throw new Error(data.error || 'Unknown error');
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error || 'Failed to generate briefing');
       }
+      
+      if (data?.success === true) {
+        // Poll until the row is written by the Inngest worker (up to 30s)
+        const startedAt = Date.now();
+        let attempts = 0;
+        const poll = async () => {
+          attempts += 1;
+          await fetchBriefing();
+          const elapsed = Date.now() - startedAt;
+          if (elapsed >= 30_000) return;
+          // If we already have a briefing, stop polling
+          const today = new Date().toISOString().split('T')[0];
+          const res = await fetch(`/api/ai/briefing/${today}`, { method: 'GET' });
+          const body = await res.json().catch(() => ({}));
+          if (res.ok && body?.briefing?.id) return;
+          await new Promise((r) => setTimeout(r, Math.min(1500 + attempts * 250, 3000)));
+          return poll();
+        };
+        await poll();
+        toast.success('Briefing updated');
+        return;
+      }
+
+      // If server queued/fell back, show message and do NOT claim success.
+      const msg = data?.error || data?.warning || 'Briefing generation was queued';
+      toast.warning(msg);
     } catch (error) {
       console.error('Generation error:', error);
       toast.error('Failed to generate briefing', {
-        description: 'Please try again later.',
+        description: error instanceof Error ? error.message : 'Please try again later.',
       });
     } finally {
       setIsRefreshing(false);

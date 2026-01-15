@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ConnectGmail } from '@/components/ConnectGmail';
 import { supabase } from '@/lib/supabase-client';
+import { toast } from 'sonner';
 import {
   DailyBriefingWidget,
   ScheduleWidget,
@@ -71,8 +72,6 @@ export default function DashboardPage() {
         if (secondsElapsed > 60) {
           console.log('Stale status detected, resetting to disconnected');
           setStatus('disconnected');
-          // Clean up stale data
-          await supabase.from('sync_status').delete().eq('user_id', userId);
           return;
         }
       }
@@ -186,58 +185,89 @@ export default function DashboardPage() {
     setStatus('error');
   };
 
-  // Reconnect Gmail
-  const handleReconnect = async () => {
+  // Refresh pipelines (no client-side deletes)
+  const handleRefreshData = async () => {
     if (!user?.id) return;
     
-    // Clear local state
-    setStatus('disconnected');
-    setEmails([]);
-    
-    // Clear Supabase data for this user
-    await supabase.from('sync_status').delete().eq('user_id', user.id);
-    await supabase.from('emails').delete().eq('user_id', user.id);
+    toast.info('Refreshing your data…', {
+      description: 'Triggering Gmail, Calendar, Drive sync and regenerating your briefing.',
+    });
+    setStatus('fetching');
+
+    const post = async (url: string) => {
+      const res = await fetch(url, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `Request failed: ${url}`);
+      return body as { warning?: string; error?: string; queued?: boolean; mode?: string };
+    };
+
+    try {
+      const results = await Promise.allSettled([
+        post('/api/trigger-sync'),
+        post('/api/integrations/calendar/sync'),
+        post('/api/integrations/drive/sync'),
+      ]);
+
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value?.warning) {
+          toast.warning(r.value.warning);
+        }
+        if (r.status === 'rejected') {
+          toast.warning('One refresh step failed', { description: String(r.reason?.message || r.reason) });
+        }
+      }
+
+      // Briefing generation is dependent on data; trigger after sync starts.
+      const briefingRes = await post('/api/ai/briefing/generate');
+      if (briefingRes?.warning) toast.warning(briefingRes.warning);
+      if (briefingRes?.error && briefingRes?.queued) toast.warning(briefingRes.error);
+      toast.success('Refresh started');
+    } catch (e) {
+      console.error(e);
+      toast.error('Refresh failed', { description: e instanceof Error ? e.message : 'Unknown error' });
+      setStatus('error');
+    }
   };
 
   // Loading state
   if (!isLoaded) {
     return (
       <div className="space-y-6">
-        <Skeleton className="h-8 w-48 mb-2" />
-        <Skeleton className="h-4 w-64 mb-8" />
-        <Skeleton className="h-64 w-full rounded-xl" />
+          <Skeleton className="h-8 w-48 mb-2" />
+          <Skeleton className="h-4 w-64 mb-8" />
+          <Skeleton className="h-64 w-full rounded-xl" />
       </div>
     );
   }
 
   return (
     <div className="space-y-8 pb-10">
-      {/* Welcome Section */}
+        {/* Welcome Section */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">
-            Welcome back, {user?.firstName || 'User'}
-          </h1>
-          <p className="text-muted-foreground">
+          <div>
+            <h1 className="text-2xl font-semibold text-foreground">
+              Welcome back, {user?.firstName || 'User'}
+            </h1>
+            <p className="text-muted-foreground">
             Here is your daily strategic overview
-          </p>
-        </div>
-        
-        {/* Refresh Button */}
-        {status === 'complete' && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleReconnect}
-            className="gap-2"
-          >
-            <RefreshCw className="h-4 w-4" />
+            </p>
+          </div>
+          
+          {/* Refresh Button */}
+          {status === 'complete' && (
+            <Button
+              variant="outline"
+              size="sm"
+            onClick={handleRefreshData}
+              className="gap-2"
+            >
+              <RefreshCw className="h-4 w-4" />
             Refresh Data
-          </Button>
-        )}
-      </div>
+            </Button>
+          )}
+        </div>
 
-      {/* ═══════════════════════════════════════════════════════════════════
+        {/* ═══════════════════════════════════════════════════════════════════
           DASHBOARD GRID LAYOUT (P0)
       ═══════════════════════════════════════════════════════════════════ */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -269,7 +299,7 @@ export default function DashboardPage() {
       {/* ═══════════════════════════════════════════════════════════════════
           PHASE 0 INTEGRATION & EMAIL WIDGETS
           Kept for validation and email list view
-      ═══════════════════════════════════════════════════════════════════ */}
+        ═══════════════════════════════════════════════════════════════════ */}
       <div className="mt-8">
         <h3 className="text-lg font-semibold mb-4">Integrations & Data Flow</h3>
         

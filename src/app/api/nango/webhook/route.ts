@@ -27,9 +27,9 @@ export async function POST(req: NextRequest) {
       const { connectionId, providerConfigKey, provider } = payload;
       
       // Try to get Clerk userId from end_user.id (this is what we set in createConnectSession)
-      let clerkUserId =
-        payload.endUser?.id ||
-        payload.end_user?.id ||
+      let clerkUserId = 
+        payload.endUser?.id || 
+        payload.end_user?.id || 
         payload.data?.endUser?.id ||
         payload.data?.end_user?.id;
       

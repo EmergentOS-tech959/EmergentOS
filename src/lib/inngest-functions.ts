@@ -4,9 +4,10 @@ import { supabaseAdmin } from './supabase-server';
 import { scanContent } from './nightfall';
 import { upsertPiiVaultTokens } from './pii-vault';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { generateBriefingForUser, listBriefingUserIds } from './briefing-generator';
 
 // Initialize Nango client
-const nango = new Nango({
+const nango = new Nango({ 
   secretKey: process.env.NANGO_SECRET_KEY!,
 });
 
@@ -61,92 +62,93 @@ export const processGmailConnection = inngest.createFunction(
   { id: 'process-gmail-connection', name: 'Process Gmail Connection', retries: 3 },
   { event: 'gmail/connection.established' },
   async ({ event, step }) => {
-    const { userId, connectionId } = event.data;
+    const { userId, connectionId } = event.data as { userId: string; connectionId?: string };
     const nangoConnectionId = connectionId || userId;
 
+    try {
     await step.run('update-status-fetching', async () => {
-      const { error } = await supa
+        const { error } = await supa
         .from('sync_status')
-        .upsert(
-          { user_id: userId, status: 'fetching', updated_at: new Date().toISOString() },
-          { onConflict: 'user_id' }
-        );
-      if (error) throw error;
+          .upsert(
+            { user_id: userId, status: 'fetching', updated_at: new Date().toISOString(), error_message: null },
+            { onConflict: 'user_id' }
+          );
+        if (error) throw error;
     });
 
     const emails = await step.run('fetch-gmail-emails', async () => {
-      const listResponse = await nango.proxy({
-        connectionId: nangoConnectionId,
-        providerConfigKey: 'google-mail',
-        method: 'GET',
-        endpoint: '/gmail/v1/users/me/messages',
-        params: { maxResults: '5', q: 'in:inbox' },
-      });
+        const listResponse = await nango.proxy({
+          connectionId: nangoConnectionId,
+          providerConfigKey: 'google-mail',
+          method: 'GET',
+          endpoint: '/gmail/v1/users/me/messages',
+          params: { maxResults: '5', q: 'in:inbox' },
+        });
 
-      const messages = listResponse.data?.messages || [];
-      if (messages.length === 0) return [];
+        const messages = listResponse.data?.messages || [];
+        if (messages.length === 0) return [];
 
-      const emailDetails: ParsedEmail[] = await Promise.all(
-        messages.slice(0, 5).map(async (msg: { id: string }) => {
-          const detailResponse = await nango.proxy({
-            connectionId: nangoConnectionId,
-            providerConfigKey: 'google-mail',
-            method: 'GET',
-            endpoint: `/gmail/v1/users/me/messages/${msg.id}`,
-            params: { format: 'full' },
-          });
+        const emailDetails: ParsedEmail[] = await Promise.all(
+          messages.slice(0, 5).map(async (msg: { id: string }) => {
+            const detailResponse = await nango.proxy({
+              connectionId: nangoConnectionId,
+              providerConfigKey: 'google-mail',
+              method: 'GET',
+              endpoint: `/gmail/v1/users/me/messages/${msg.id}`,
+              params: { format: 'full' },
+            });
+            
+            const responseData = detailResponse.data;
+            let headers: GmailHeader[] = [];
+            if (responseData?.payload?.headers) headers = responseData.payload.headers;
+            else if (Array.isArray(responseData?.headers)) headers = responseData.headers;
 
-          const responseData = detailResponse.data;
-          let headers: GmailHeader[] = [];
-          if (responseData?.payload?.headers) headers = responseData.payload.headers;
-          else if (Array.isArray(responseData?.headers)) headers = responseData.headers;
+            const getHeader = (name: string): string => {
+              const header = headers.find((h: GmailHeader) => h.name?.toLowerCase() === name.toLowerCase());
+              return header?.value || 'Unknown';
+            };
 
-          const getHeader = (name: string): string => {
-            const header = headers.find((h: GmailHeader) => h.name?.toLowerCase() === name.toLowerCase());
-            return header?.value || 'Unknown';
-          };
+            return {
+              id: msg.id,
+              from: getHeader('From'),
+              subject: getHeader('Subject'),
+              date: getHeader('Date'),
+            };
+          })
+        );
 
-          return {
-            id: msg.id,
-            from: getHeader('From'),
-            subject: getHeader('Subject'),
-            date: getHeader('Date'),
-          };
-        })
-      );
-
-      return emailDetails;
+        return emailDetails;
     });
 
     await step.run('update-status-securing', async () => {
-      const { error } = await supa
+        const { error } = await supa
         .from('sync_status')
-        .upsert(
-          { user_id: userId, status: 'securing', updated_at: new Date().toISOString() },
-          { onConflict: 'user_id' }
-        );
-      if (error) throw error;
-    });
+          .upsert(
+            { user_id: userId, status: 'securing', updated_at: new Date().toISOString(), error_message: null },
+            { onConflict: 'user_id' }
+          );
+        if (error) throw error;
+      });
 
-    await step.run('nightfall-dlp-scan', async () => {
-      // Scan and tokenize the fields we will store
-      for (const email of emails) {
-        const scanned = await scanContent(`${email.from}\n${email.subject}`);
-        await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
+      await step.run('nightfall-dlp-scan', async () => {
+        // Scan and tokenize the fields we will store
+        for (const email of emails) {
+          const scanned = await scanContent(`${email.from}\n${email.subject}`);
+          await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
 
-        // Replace stored fields with tokenized versions
-        const [fromLine, ...subjectLines] = scanned.redacted.split('\n');
-        email.from = fromLine || email.from;
-        email.subject = subjectLines.join('\n') || email.subject;
-      }
-    });
+          // Replace stored fields with tokenized versions
+          const [fromLine, ...subjectLines] = scanned.redacted.split('\n');
+          email.from = fromLine || email.from;
+          email.subject = subjectLines.join('\n') || email.subject;
+        }
+      });
 
     await step.run('persist-emails', async () => {
-      const { error: deleteError } = await supa.from('emails').delete().eq('user_id', userId);
-      if (deleteError) console.error('Failed to delete existing emails', deleteError);
+        const { error: deleteError } = await supa.from('emails').delete().eq('user_id', userId);
+        if (deleteError) console.error('Failed to delete existing emails', deleteError);
 
       if (emails.length > 0) {
-        const rows = emails.map((email: ParsedEmail) => ({
+          const rows = emails.map((email: ParsedEmail) => ({
           user_id: userId,
           message_id: email.id,
           sender: email.from,
@@ -155,27 +157,40 @@ export const processGmailConnection = inngest.createFunction(
           security_verified: true,
         }));
 
-        const { error: insertError } = await supa.from('emails').insert(rows);
-        if (insertError) throw insertError;
-      }
-    });
+          const { error: insertError } = await supa.from('emails').insert(rows);
+          if (insertError) throw insertError;
+        }
+      });
 
-    await step.run('update-status-complete', async () => {
-      const { error } = await supa
-        .from('sync_status')
-        .upsert(
-          { user_id: userId, status: 'complete', updated_at: new Date().toISOString() },
-          { onConflict: 'user_id' }
-        );
-      if (error) throw error;
-    });
+      await step.run('update-status-complete', async () => {
+        const { error } = await supa
+          .from('sync_status')
+          .upsert(
+            { user_id: userId, status: 'complete', updated_at: new Date().toISOString(), error_message: null },
+            { onConflict: 'user_id' }
+          );
+        if (error) throw error;
+      });
 
-    return {
-      success: true,
-      userId,
-      emailsProcessed: emails.length,
-      timestamp: new Date().toISOString(),
-    };
+      return {
+        success: true,
+        userId,
+        emailsProcessed: emails.length,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      await step.run('update-status-error', async () => {
+        const { error } = await supa
+          .from('sync_status')
+          .upsert(
+            { user_id: userId, status: 'error', error_message: message, updated_at: new Date().toISOString() },
+            { onConflict: 'user_id' }
+          );
+        if (error) console.error('Failed to update sync_status error', error);
+      });
+      throw err;
+    }
   }
 );
 
@@ -325,8 +340,8 @@ export const syncCalendarEvents = inngest.createFunction(
         .from('sync_status')
         .upsert(
           {
-            user_id: userId,
-            status: 'complete',
+          user_id: userId,
+          status: 'complete',
             current_provider: null,
             updated_at: new Date().toISOString(),
           },
@@ -396,7 +411,7 @@ export const syncDriveDocuments = inngest.createFunction(
             user_id: userId,
             status: 'securing',
             current_provider: 'drive',
-            updated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
           },
           { onConflict: 'user_id' }
         );
@@ -447,7 +462,7 @@ export const syncDriveDocuments = inngest.createFunction(
       if (error) throw error;
     });
 
-    return {
+    return { 
       success: true,
       userId,
       documentsProcessed: files.length,
@@ -456,5 +471,40 @@ export const syncDriveDocuments = inngest.createFunction(
   }
 );
 
+/**
+ * Strategic Clarity: generate daily briefing (manual trigger)
+ */
+export const generateDailyBriefing = inngest.createFunction(
+  { id: 'generate-daily-briefing', name: 'Generate Daily Briefing', retries: 2 },
+  { event: 'briefing/generate.requested' },
+  async ({ event, step }) => {
+    const { userId, date } = event.data as { userId: string; date?: string };
+    await step.run('generate-briefing', async () => generateBriefingForUser({ userId, date }));
+    return { success: true, userId, date: date || new Date().toISOString().slice(0, 10) };
+  }
+);
+
+/**
+ * Strategic Clarity: cron fan-out (6 AM UTC)
+ */
+export const generateDailyBriefingsCron = inngest.createFunction(
+  { id: 'generate-daily-briefings-cron', name: 'Generate Daily Briefings (Cron)', retries: 1 },
+  { cron: '0 6 * * *' },
+  async ({ step }) => {
+    const userIds = await step.run('list-users', async () => listBriefingUserIds());
+    if (userIds.length === 0) return { success: true, queued: 0 };
+
+    await step.run('enqueue', async () => {
+      await inngest.send(
+        userIds.map((userId) => ({
+          name: 'briefing/generate.requested',
+          data: { userId, date: new Date().toISOString().slice(0, 10) },
+        }))
+      );
+    });
+    return { success: true, queued: userIds.length };
+  }
+);
+
 // Export all functions
-export const functions = [processGmailConnection, syncCalendarEvents, syncDriveDocuments];
+export const functions = [processGmailConnection, syncCalendarEvents, syncDriveDocuments, generateDailyBriefing, generateDailyBriefingsCron];
