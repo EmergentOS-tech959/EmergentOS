@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { Nango } from '@nangohq/node';
 
@@ -7,7 +7,7 @@ import { Nango } from '@nangohq/node';
  * Creates a Nango connect session token for the authenticated user
  * This token is used by the frontend to initiate OAuth flows
  */
-export async function POST(_req: NextRequest) {
+export async function POST() {
   try {
     // Get the authenticated user from Clerk
     const { userId } = await auth();
@@ -35,12 +35,12 @@ export async function POST(_req: NextRequest) {
     });
 
     // Create a connect session for this user
-    // Note: Integration name must match what's configured in Nango dashboard
+    // Note: Integration names must match what's configured in Nango dashboard
     const response = await nango.createConnectSession({
       end_user: {
         id: userId, // This is our Clerk user ID - Nango stores it with the connection
       },
-      allowed_integrations: ['google-mail'], // Must match Nango dashboard integration ID
+      allowed_integrations: ['google-mail', 'google-calendar', 'google-drive'],
     });
 
     return NextResponse.json({

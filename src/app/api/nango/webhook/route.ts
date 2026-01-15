@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Nango } from '@nangohq/node';
 import { inngest } from '@/lib/inngest';
+import { supabaseAdmin } from '@/lib/supabase-server';
+import type { Database } from '@/types';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * POST /api/nango/webhook
@@ -23,19 +26,18 @@ export async function POST(req: NextRequest) {
     if (payload.type === 'auth') {
       const { connectionId, providerConfigKey, provider } = payload;
       
-      // First, try to get end_user.id from the webhook payload
-      let clerkUserId = 
-        payload.endUser?.id || 
-        payload.end_user?.id || 
+      // Try to get Clerk userId from end_user.id (this is what we set in createConnectSession)
+      let clerkUserId =
+        payload.endUser?.id ||
+        payload.end_user?.id ||
         payload.data?.endUser?.id ||
-        payload.data?.end_user?.id ||
-        payload.connection?.end_user_id;
+        payload.data?.end_user?.id;
       
       console.log('=== EXTRACTED FROM PAYLOAD ===');
       console.log('connectionId:', connectionId);
       console.log('clerkUserId from payload:', clerkUserId);
       
-      // If not in payload, query Nango to get the connection details
+      // If not in payload, query Nango to get the connection details (authoritative)
       if (!clerkUserId && connectionId && process.env.NANGO_SECRET_KEY) {
         try {
           console.log('Fetching connection details from Nango...');
@@ -62,30 +64,81 @@ export async function POST(req: NextRequest) {
         }
       }
       
-      // Fallback to connectionId if we still don't have a Clerk user ID
-      const finalUserId = clerkUserId || connectionId;
+      // If we still don't have a Clerk userId, we cannot safely associate the connection.
+      if (!clerkUserId) {
+        console.error('Unable to determine Clerk userId for connection; refusing to persist mapping.', {
+          connectionId,
+          providerConfigKey,
+          provider,
+        });
+        return NextResponse.json({ received: true, error: 'Missing end_user.id' });
+      }
+      const finalUserId = clerkUserId;
       
       console.log('=== FINAL IDs ===');
       console.log('finalUserId (for Supabase):', finalUserId);
       console.log('connectionId (for Nango):', connectionId);
       console.log('===================');
       
-      // Only process google-mail connections
-      if (providerConfigKey === 'google-mail' || provider === 'google-mail') {
+      const providerKey = providerConfigKey || provider;
+
+      const upsertConnection = async (providerName: string) => {
+        type ConnectionInsert = Database['public']['Tables']['connections']['Insert'];
+        const payload: ConnectionInsert = {
+          user_id: String(finalUserId),
+          provider: providerName,
+          connection_id: String(connectionId),
+          status: 'connected',
+          metadata: { clerk_user_id: String(finalUserId) },
+          updated_at: new Date().toISOString(),
+        };
+
+        const connectionsClient = supabaseAdmin as SupabaseClient<Database>;
+        const tableName: keyof Database['public']['Tables'] = 'connections';
+        // Also repair any legacy row that used a non-Clerk user_id for this same connection_id.
+        await connectionsClient
+          .from(tableName)
+          // Type casting to satisfy Supabase typed client for custom schema
+          .update({ user_id: String(finalUserId), metadata: { clerk_user_id: String(finalUserId) } } as unknown as never)
+          .eq('connection_id', String(connectionId))
+          .eq('provider', providerName);
+        const { error: connError } = await connectionsClient
+          .from(tableName)
+          // Type casting to satisfy Supabase typed client for custom schema
+          .upsert(payload as unknown as never, { onConflict: 'user_id,provider' });
+        if (connError) {
+          console.error(`Failed to upsert connection for ${providerName}`, connError);
+        }
+      };
+
+      if (providerKey === 'google-mail') {
+        await upsertConnection('gmail');
         console.log(`Gmail connected - Clerk userId: ${finalUserId}, Nango connectionId: ${connectionId}`);
-        
-        // Trigger Inngest function to process emails
         await inngest.send({
           name: 'gmail/connection.established',
           data: {
-            userId: finalUserId,         // For Supabase - Clerk user ID (or fallback to connectionId)
-            connectionId: connectionId,  // For Nango proxy calls
-            providerConfigKey: providerConfigKey || 'google-mail',
+            userId: finalUserId,
+            connectionId,
+            providerConfigKey: providerKey,
             timestamp: new Date().toISOString(),
           },
         });
-
         console.log('Inngest event sent: gmail/connection.established');
+      }
+
+      if (providerKey === 'google-calendar') {
+        await upsertConnection('calendar');
+        console.log(`Calendar connected - Clerk userId: ${finalUserId}, Nango connectionId: ${connectionId}`);
+        await inngest.send({
+          name: 'calendar/connection.established',
+          data: {
+            userId: finalUserId,
+            connectionId,
+            providerConfigKey: providerKey,
+            timestamp: new Date().toISOString(),
+          },
+        });
+        console.log('Inngest event sent: calendar/connection.established');
       }
     }
 
@@ -117,7 +170,7 @@ export async function POST(req: NextRequest) {
 }
 
 // Also handle GET for webhook verification
-export async function GET(_req: NextRequest) {
+export async function GET() {
   return NextResponse.json({ 
     status: 'Nango webhook endpoint active',
     timestamp: new Date().toISOString(),

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useUser } from '@clerk/nextjs';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui/card';
@@ -28,7 +28,7 @@ export function DailyBriefingWidget() {
   const [showPriorities, setShowPriorities] = useState(true);
   const [showSchedule, setShowSchedule] = useState(true);
 
-  const fetchBriefing = async () => {
+  const fetchBriefing = useCallback(async () => {
     try {
       if (!user?.id) return;
       setIsLoading(true);
@@ -48,12 +48,12 @@ export function DailyBriefingWidget() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!isLoaded) return;
     void fetchBriefing();
-  }, [isLoaded, user?.id]);
+  }, [isLoaded, fetchBriefing]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);

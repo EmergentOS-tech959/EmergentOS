@@ -10,10 +10,8 @@ import {
 import {
   Command,
   Search,
-  MessageSquare,
   Sidebar as SidebarIcon,
   Keyboard,
-  Settings,
 } from 'lucide-react';
 
 interface HelpOverlayProps {

@@ -11,3 +11,7 @@ export const supabaseAdmin: SupabaseClient<Database> = createClient<Database>(
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
+// Convenience helper to keep parity with server/client callers
+export function supabaseServerClient() {
+  return supabaseAdmin;
+}

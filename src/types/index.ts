@@ -135,6 +135,41 @@ export interface ParsedEmail {
 export interface Database {
   public: {
     Tables: {
+      connections: {
+        Row: {
+          id?: string;
+          user_id: string;
+          provider: string;
+          connection_id: string;
+          status?: string;
+          metadata?: Record<string, unknown> | null;
+          last_sync_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          provider: string;
+          connection_id: string;
+          status?: string;
+          metadata?: Record<string, unknown> | null;
+          last_sync_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<{
+          id?: string;
+          user_id: string;
+          provider: string;
+          connection_id: string;
+          status?: string;
+          metadata?: Record<string, unknown> | null;
+          last_sync_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        }>;
+      };
       sync_status: {
         Row: SyncStatusRecord;
         Insert: Omit<SyncStatusRecord, 'id'>;
@@ -161,5 +196,9 @@ export interface Database {
         Update: Partial<Omit<Briefing, 'id' | 'generated_at'>>;
       };
     };
+    Views: Record<string, never>;
+    Functions: Record<string, never>;
+    Enums: Record<string, never>;
+    CompositeTypes: Record<string, never>;
   };
 }

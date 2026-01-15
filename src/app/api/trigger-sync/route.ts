@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { inngest } from '@/lib/inngest';
 
@@ -14,7 +14,7 @@ import { inngest } from '@/lib/inngest';
  * 
  * In production, this should be removed or protected with admin auth.
  */
-export async function POST(_req: NextRequest) {
+export async function POST() {
   try {
     // Get the authenticated user from Clerk
     const { userId } = await auth();

@@ -1,6 +1,8 @@
 'use client';
 
 import { useUser } from '@clerk/nextjs';
+import { useCallback, useEffect, useState } from 'react';
+import type React from 'react';
 import { 
   User, 
   Link2, 
@@ -20,6 +22,11 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { supabase } from '@/lib/supabase-client';
+import { toast } from 'sonner';
+import { ConnectGmail } from '@/components/ConnectGmail';
+import { ConnectCalendar } from '@/components/ConnectCalendar';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 interface ConnectionCardProps {
   name: string;
@@ -28,8 +35,7 @@ interface ConnectionCardProps {
   status: 'connected' | 'disconnected' | 'error';
   lastSync?: string;
   itemCount?: number;
-  onConnect: () => void;
-  onDisconnect: () => void;
+  action: React.ReactNode;
 }
 
 function ConnectionCard({
@@ -39,8 +45,7 @@ function ConnectionCard({
   status,
   lastSync,
   itemCount,
-  onConnect,
-  onDisconnect,
+  action,
 }: ConnectionCardProps) {
   return (
     <Card className="p-4">
@@ -85,13 +90,7 @@ function ConnectionCard({
               <span>Error</span>
             </div>
           )}
-          <Button
-            variant={status === 'connected' ? 'outline' : 'default'}
-            size="sm"
-            onClick={status === 'connected' ? onDisconnect : onConnect}
-          >
-            {status === 'connected' ? 'Disconnect' : 'Connect'}
-          </Button>
+          {action}
         </div>
       </div>
     </Card>
@@ -100,6 +99,68 @@ function ConnectionCard({
 
 export default function SettingsPage() {
   const { user } = useUser();
+  const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'disconnected' | 'error'>>({
+    gmail: 'disconnected',
+    calendar: 'disconnected',
+    drive: 'disconnected',
+  });
+
+  const refreshConnections = useCallback(async () => {
+    if (!user?.id) return;
+    const supa = supabase as unknown as SupabaseClient;
+    const { data, error } = await supa
+      .from('connections')
+      .select('provider,status,user_id,metadata')
+      .or(`user_id.eq.${user.id},metadata->>clerk_user_id.eq.${user.id}`);
+
+    if (error) {
+      console.error('Failed to load connections', error);
+      return;
+    }
+
+    const next = { gmail: 'disconnected', calendar: 'disconnected', drive: 'disconnected' } as Record<
+      string,
+      'connected' | 'disconnected' | 'error'
+    >;
+
+    for (const row of (data || []) as unknown[]) {
+      const r = row as { provider?: string; status?: string };
+      const provider = r.provider;
+      const status = r.status === 'connected' ? 'connected' : r.status === 'error' ? 'error' : 'disconnected';
+      if (!provider) continue;
+      if (provider in next) next[provider] = status;
+    }
+
+    setConnectionStatus(next);
+  }, [user?.id]);
+
+  useEffect(() => {
+    void refreshConnections();
+  }, [refreshConnections]);
+
+  const disconnectCalendar = useCallback(async () => {
+    try {
+      const res = await fetch('/api/integrations/calendar/disconnect', { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to disconnect');
+      toast.success('Calendar disconnected');
+      await refreshConnections();
+    } catch (e) {
+      console.error(e);
+      toast.error('Failed to disconnect calendar');
+    }
+  }, [refreshConnections]);
+
+  const disconnectGmail = useCallback(async () => {
+    try {
+      const res = await fetch('/api/integrations/gmail/disconnect', { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to disconnect');
+      toast.success('Gmail disconnected');
+      await refreshConnections();
+    } catch (e) {
+      console.error(e);
+      toast.error('Failed to disconnect Gmail');
+    }
+  }, [refreshConnections]);
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -164,25 +225,42 @@ export default function SettingsPage() {
             name="Gmail"
             description="Access your email for AI insights"
             icon={<Mail className="h-5 w-5 text-primary" />}
-            status="disconnected"
-            onConnect={() => console.log('Connect Gmail')}
-            onDisconnect={() => console.log('Disconnect Gmail')}
+            status={connectionStatus.gmail}
+            action={
+              connectionStatus.gmail === 'connected' ? (
+                <Button variant="outline" size="sm" onClick={disconnectGmail}>
+                  Disconnect
+                </Button>
+              ) : (
+                <ConnectGmail onConnectionSuccess={refreshConnections} />
+              )
+            }
           />
           <ConnectionCard
             name="Google Calendar"
             description="Sync your calendar events"
             icon={<Calendar className="h-5 w-5 text-primary" />}
-            status="disconnected"
-            onConnect={() => console.log('Connect Calendar')}
-            onDisconnect={() => console.log('Disconnect Calendar')}
+            status={connectionStatus.calendar}
+            action={
+              connectionStatus.calendar === 'connected' ? (
+                <Button variant="outline" size="sm" onClick={disconnectCalendar}>
+                  Disconnect
+                </Button>
+              ) : (
+                <ConnectCalendar onConnectionSuccess={refreshConnections} />
+              )
+            }
           />
           <ConnectionCard
             name="Google Drive"
             description="Access your documents for context"
             icon={<FileText className="h-5 w-5 text-primary" />}
-            status="disconnected"
-            onConnect={() => console.log('Connect Drive')}
-            onDisconnect={() => console.log('Disconnect Drive')}
+            status={connectionStatus.drive}
+            action={
+              <Button variant="outline" size="sm" disabled>
+                Coming soon
+              </Button>
+            }
           />
         </TabsContent>
 

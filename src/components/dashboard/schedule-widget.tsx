@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -8,6 +8,7 @@ import { Calendar, Clock, MapPin, AlertTriangle, Video } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase-client';
 import { useUser } from '@clerk/nextjs';
+import { toast } from 'sonner';
 
 interface CalendarEvent {
   id: string;
@@ -25,38 +26,68 @@ export function ScheduleWidget() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const fetchEvents = useCallback(async () => {
+    if (!user?.id) return;
+    
+    try {
+      setIsLoading(true);
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
+      const { data, error } = await supabase
+        .from('calendar_events')
+        .select('*')
+        .eq('user_id', user.id)
+        .gte('start_time', todayStart.toISOString())
+        .lte('start_time', todayEnd.toISOString())
+        .order('start_time', { ascending: true });
+
+      if (error) throw error;
+      setEvents(data || []);
+    } catch (error) {
+      console.error('Error fetching events:', error);
+      toast.error('Failed to load calendar events');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user?.id]);
+
+  const handleSync = useCallback(async () => {
+    if (!user?.id) {
+      toast.error('Please sign in to sync your calendar');
+      return;
+    }
+    setIsSyncing(true);
+    try {
+      const res = await fetch('/api/integrations/calendar/sync', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body?.error || 'Failed to trigger sync');
+      }
+      if (typeof body?.eventsSynced === 'number') {
+        toast.success(`Calendar synced (${body.eventsSynced} events)`);
+      } else if (body?.warning) {
+        toast.warning(body.warning);
+      } else {
+        toast.success('Calendar sync started');
+      }
+      await fetchEvents();
+    } catch (error) {
+      console.error('Calendar sync error:', error);
+      toast.error('Calendar sync failed');
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [user?.id, fetchEvents]);
 
   useEffect(() => {
-    const fetchEvents = async () => {
-      if (!user?.id) return;
-      
-      try {
-        setIsLoading(true);
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-        
-        const todayEnd = new Date();
-        todayEnd.setHours(23, 59, 59, 999);
-
-        const { data, error } = await supabase
-          .from('calendar_events')
-          .select('*')
-          .eq('user_id', user.id)
-          .gte('start_time', todayStart.toISOString())
-          .lte('start_time', todayEnd.toISOString())
-          .order('start_time', { ascending: true });
-
-        if (error) throw error;
-        setEvents(data || []);
-      } catch (error) {
-        console.error('Error fetching events:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
     void fetchEvents();
-  }, [user?.id]);
+  }, [fetchEvents]);
 
   const formatTime = (dateStr: string) => {
     return new Date(dateStr).toLocaleTimeString([], { 
@@ -111,8 +142,13 @@ export function ScheduleWidget() {
         {events.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 text-center">
             <p className="text-muted-foreground text-sm">No events scheduled for today.</p>
-            <Button variant="link" className="text-primary text-xs mt-2">
-              Sync Calendar
+            <Button
+              variant="link"
+              className="text-primary text-xs mt-2"
+              onClick={handleSync}
+              disabled={isSyncing}
+            >
+              {isSyncing ? 'Syncing...' : 'Sync Calendar'}
             </Button>
           </div>
         ) : (

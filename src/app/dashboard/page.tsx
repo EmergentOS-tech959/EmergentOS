@@ -30,7 +30,6 @@ export default function DashboardPage() {
   const { user, isLoaded } = useUser();
   const [status, setStatus] = useState<SyncStatus>('disconnected');
   const [emails, setEmails] = useState<Email[]>([]);
-  const [errorMessage, setErrorMessage] = useState<string>('');
 
   // Format date for display
   const formatDate = (dateStr: string) => {
@@ -185,7 +184,6 @@ export default function DashboardPage() {
   const handleConnectionError = (error: Error) => {
     console.error('Gmail connection failed:', error.message);
     setStatus('error');
-    setErrorMessage('Failed to connect to Gmail. Please try again.');
   };
 
   // Reconnect Gmail
@@ -195,7 +193,6 @@ export default function DashboardPage() {
     // Clear local state
     setStatus('disconnected');
     setEmails([]);
-    setErrorMessage('');
     
     // Clear Supabase data for this user
     await supabase.from('sync_status').delete().eq('user_id', user.id);
