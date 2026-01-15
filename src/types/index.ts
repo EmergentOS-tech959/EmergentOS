@@ -1,9 +1,9 @@
-// EmergentOS Phase 0 - TypeScript Type Definitions
+// EmergentOS Phase 1 - TypeScript Type Definitions
 
 /**
- * Sync status states for the email ingestion pipeline
+ * Sync status states for ingestion pipelines
  */
-export type SyncStatus = 'disconnected' | 'fetching' | 'securing' | 'complete';
+export type SyncStatus = 'disconnected' | 'connecting' | 'fetching' | 'securing' | 'complete' | 'error';
 
 /**
  * Email metadata stored in Supabase
@@ -12,11 +12,78 @@ export interface Email {
   id: string;
   user_id: string;
   message_id: string;
+  thread_id?: string;
   sender: string;
+  sender_email?: string;
   subject: string;
+  snippet?: string;
+  body_preview?: string;
   received_at: string;
+  labels?: string[];
+  is_important?: boolean;
   security_verified: boolean;
   created_at: string;
+}
+
+/**
+ * Calendar event stored in Supabase
+ */
+export interface CalendarEvent {
+  id: string;
+  user_id: string;
+  event_id: string;
+  calendar_id: string;
+  title: string;
+  description?: string;
+  start_time: string;
+  end_time: string;
+  location?: string;
+  attendees?: string[]; // stored as JSONB in DB
+  is_all_day: boolean;
+  status: 'confirmed' | 'tentative' | 'cancelled';
+  has_conflict: boolean;
+  conflict_with?: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Drive document metadata
+ */
+export interface DriveDocument {
+  id: string;
+  user_id: string;
+  document_id: string;
+  name: string;
+  mime_type: string;
+  folder_path?: string;
+  modified_at: string;
+  web_view_link?: string;
+  content_hash?: string;
+  is_context_folder: boolean;
+  created_at: string;
+}
+
+/**
+ * AI-generated daily briefing
+ */
+export interface Briefing {
+  id: string;
+  user_id: string;
+  briefing_date: string;
+  content: string; // Markdown content
+  summary?: string;
+  key_priorities: Array<{
+    title: string;
+    description: string;
+    source: string;
+  }>;
+  schedule_summary?: {
+    conflicts: Array<string>;
+    key_meetings: Array<string>;
+  };
+  generated_at: string;
+  sources?: string[];
 }
 
 /**
@@ -26,6 +93,8 @@ export interface SyncStatusRecord {
   id: string;
   user_id: string;
   status: SyncStatus;
+  current_provider?: string;
+  error_message?: string;
   updated_at: string;
 }
 
@@ -61,24 +130,6 @@ export interface ParsedEmail {
 }
 
 /**
- * Nango webhook payload for auth events
- */
-export interface NangoAuthWebhookPayload {
-  type: 'auth';
-  connectionId: string;
-  providerConfigKey: string;
-  provider: string;
-}
-
-/**
- * Inngest event data for Gmail connection
- */
-export interface GmailConnectionEventData {
-  userId: string;
-  providerConfigKey: string;
-}
-
-/**
  * Database types for Supabase
  */
 export interface Database {
@@ -94,7 +145,21 @@ export interface Database {
         Insert: Omit<Email, 'id' | 'created_at'>;
         Update: Partial<Omit<Email, 'id' | 'created_at'>>;
       };
+      calendar_events: {
+        Row: CalendarEvent;
+        Insert: Omit<CalendarEvent, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<Omit<CalendarEvent, 'id' | 'created_at' | 'updated_at'>>;
+      };
+      drive_documents: {
+        Row: DriveDocument;
+        Insert: Omit<DriveDocument, 'id' | 'created_at'>;
+        Update: Partial<Omit<DriveDocument, 'id' | 'created_at'>>;
+      };
+      briefings: {
+        Row: Briefing;
+        Insert: Omit<Briefing, 'id' | 'generated_at'>;
+        Update: Partial<Omit<Briefing, 'id' | 'generated_at'>>;
+      };
     };
   };
 }
-

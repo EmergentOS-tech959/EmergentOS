@@ -127,8 +127,13 @@ export function Sidebar({ isCollapsed, onToggle, onOpenCommandPalette }: Sidebar
           {isCollapsed ? (
             <Tooltip>
               <TooltipTrigger asChild>{itemContent}</TooltipTrigger>
-              <TooltipContent side="right">
+              <TooltipContent side="right" className="flex items-center gap-2">
                 <p>{item.label}</p>
+                {item.id === 'search' && (
+                  <kbd className="pointer-events-none h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium opacity-100 flex">
+                    <span className="text-xs">⌘</span>K
+                  </kbd>
+                )}
               </TooltipContent>
             </Tooltip>
           ) : (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useUser, UserButton } from '@clerk/nextjs';
+import { useUser } from '@clerk/nextjs';
 import { useState, useEffect, useCallback } from 'react';
 import { Shield, Mail, Calendar, FileText, CheckCircle2, Lock, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,12 @@ import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ConnectGmail } from '@/components/ConnectGmail';
 import { supabase } from '@/lib/supabase-client';
+import {
+  DailyBriefingWidget,
+  ScheduleWidget,
+  GoalProgressWidget,
+  KeyDecisionsWidget
+} from '@/components/dashboard';
 
 // Email type from Supabase
 interface Email {
@@ -199,52 +205,79 @@ export default function DashboardPage() {
   // Loading state
   if (!isLoaded) {
     return (
-      <div className="min-h-screen bg-background">
-        <DashboardHeader isLoading />
-        <main className="container mx-auto px-6 py-8">
-          <Skeleton className="h-8 w-48 mb-2" />
-          <Skeleton className="h-4 w-64 mb-8" />
-          <Skeleton className="h-64 w-full rounded-xl" />
-        </main>
+      <div className="space-y-6">
+        <Skeleton className="h-8 w-48 mb-2" />
+        <Skeleton className="h-4 w-64 mb-8" />
+        <Skeleton className="h-64 w-full rounded-xl" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <DashboardHeader user={user} />
-      
-      <main className="container mx-auto px-6 py-8">
-        {/* Welcome Section */}
-        <div className="mb-8 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-foreground">
-              Welcome back, {user?.firstName || 'User'}
-            </h1>
-            <p className="text-muted-foreground">
-              Phase 0 — Architectural Validation Dashboard
-            </p>
-          </div>
-          
-          {/* Refresh Button */}
-          {status === 'complete' && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleReconnect}
-              className="gap-2"
-            >
-              <RefreshCw className="h-4 w-4" />
-              Refresh
-            </Button>
-          )}
+    <div className="space-y-8 pb-10">
+      {/* Welcome Section */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-foreground">
+            Welcome back, {user?.firstName || 'User'}
+          </h1>
+          <p className="text-muted-foreground">
+            Here is your daily strategic overview
+          </p>
+        </div>
+        
+        {/* Refresh Button */}
+        {status === 'complete' && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleReconnect}
+            className="gap-2"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Refresh Data
+          </Button>
+        )}
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════
+          DASHBOARD GRID LAYOUT (P0)
+      ═══════════════════════════════════════════════════════════════════ */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        {/* Top Left: Daily Briefing (2 cols) */}
+        <div className="lg:col-span-2 min-h-[350px]">
+          <DailyBriefingWidget />
         </div>
 
-        {/* ═══════════════════════════════════════════════════════════════════
-            STATE: Disconnected - Show Gmail Connect
-        ═══════════════════════════════════════════════════════════════════ */}
+        {/* Top Right: Goal Progress (1 col) */}
+        <div className="lg:col-span-1 min-h-[350px]">
+          <GoalProgressWidget />
+        </div>
+
+        {/* Middle Left: Schedule (1 col - but actually maybe 1 or 2 depending on design)
+            Based on spec diagram: [Schedule] [Key Decisions]
+            Let's make them split the row.
+        */}
+        <div className="lg:col-span-2 min-h-[300px]">
+          <ScheduleWidget />
+        </div>
+
+        {/* Middle Right: Key Decisions */}
+        <div className="lg:col-span-1 min-h-[300px]">
+          <KeyDecisionsWidget />
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════
+          PHASE 0 INTEGRATION & EMAIL WIDGETS
+          Kept for validation and email list view
+      ═══════════════════════════════════════════════════════════════════ */}
+      <div className="mt-8">
+        <h3 className="text-lg font-semibold mb-4">Integrations & Data Flow</h3>
+        
         {status === 'disconnected' && (
-          <Card className="p-8 bg-card border-border">
+          <Card className="p-8 bg-card border-border mb-6">
             <div className="flex flex-col items-center justify-center text-center">
               <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
                 <Mail className="h-8 w-8 text-primary" />
@@ -256,13 +289,10 @@ export default function DashboardPage() {
                 Connect your Google account to test the architectural pipeline.
                 We&apos;ll fetch your last 5 emails through the secure DLP gate.
               </p>
-              
-              {/* REAL Nango OAuth Connection */}
               <ConnectGmail 
                 onConnectionSuccess={handleConnectionSuccess}
                 onConnectionError={handleConnectionError}
               />
-              
               <p className="text-xs text-muted-foreground mt-6">
                 Data flow: Gmail → Nango → Inngest → [2s DLP Gate] → Supabase → UI
               </p>
@@ -270,39 +300,8 @@ export default function DashboardPage() {
           </Card>
         )}
 
-        {/* ═══════════════════════════════════════════════════════════════════
-            STATE: Error - Connection or sync failed
-        ═══════════════════════════════════════════════════════════════════ */}
-        {status === 'error' && (
-          <Card className="p-8 bg-card border-border border-red-500/30">
-            <div className="flex flex-col items-center justify-center text-center">
-              <div className="h-16 w-16 rounded-full bg-red-500/10 flex items-center justify-center mb-4">
-                <Mail className="h-8 w-8 text-red-500" />
-              </div>
-              <h2 className="text-xl font-semibold text-foreground mb-2">
-                Connection Failed
-              </h2>
-              <p className="text-muted-foreground mb-6">
-                {errorMessage}
-              </p>
-              
-              <Button 
-                onClick={handleReconnect}
-                variant="outline"
-                className="gap-2"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Try Again
-              </Button>
-            </div>
-          </Card>
-        )}
-
-        {/* ═══════════════════════════════════════════════════════════════════
-            STATE: Fetching - Getting emails from Gmail via Nango
-        ═══════════════════════════════════════════════════════════════════ */}
         {status === 'fetching' && (
-          <Card className="p-8 bg-card border-border">
+          <Card className="p-8 bg-card border-border mb-6">
             <div className="flex flex-col items-center justify-center text-center">
               <div className="h-16 w-16 rounded-full bg-blue-500/10 flex items-center justify-center mb-4">
                 <Loader2 className="h-8 w-8 text-blue-500 animate-spin" />
@@ -313,8 +312,6 @@ export default function DashboardPage() {
               <p className="text-muted-foreground mb-6">
                 Retrieving your latest messages from Gmail via Nango
               </p>
-              
-              {/* Progress Steps */}
               <div className="flex items-center gap-4 mt-4">
                 <StepIndicator label="Fetch" status="active" />
                 <div className="h-px w-8 bg-border" />
@@ -322,19 +319,12 @@ export default function DashboardPage() {
                 <div className="h-px w-8 bg-border" />
                 <StepIndicator label="Secure" status="pending" />
               </div>
-              
-              <p className="text-xs text-muted-foreground mt-6 font-mono">
-                nango.proxy → gmail/v1/users/me/messages
-              </p>
             </div>
           </Card>
         )}
 
-        {/* ═══════════════════════════════════════════════════════════════════
-            STATE: Securing - DLP Security Scan (2 second blocking delay)
-        ═══════════════════════════════════════════════════════════════════ */}
         {status === 'securing' && (
-          <Card className="p-8 bg-card border-border border-orange-500/30">
+          <Card className="p-8 bg-card border-border border-orange-500/30 mb-6">
             <div className="flex flex-col items-center justify-center text-center">
               <div className="h-16 w-16 rounded-full bg-orange-500/10 flex items-center justify-center mb-4 relative">
                 <Lock className="h-8 w-8 text-orange-500" />
@@ -349,8 +339,6 @@ export default function DashboardPage() {
               <p className="text-xs text-orange-500 font-medium mb-6">
                 ⏱ Scanning email content for sensitive information...
               </p>
-              
-              {/* Progress Steps */}
               <div className="flex items-center gap-4 mt-4">
                 <StepIndicator label="Fetch" status="complete" />
                 <div className="h-px w-8 bg-primary" />
@@ -358,38 +346,20 @@ export default function DashboardPage() {
                 <div className="h-px w-8 bg-border" />
                 <StepIndicator label="Secure" status="pending" />
               </div>
-              
-              <p className="text-xs text-muted-foreground mt-6 font-mono">
-                Inngest → step.run(&apos;nightfall-dlp-scan&apos;)
-              </p>
             </div>
           </Card>
         )}
 
-        {/* ═══════════════════════════════════════════════════════════════════
-            STATE: Complete - Show Email List (Compact)
-        ═══════════════════════════════════════════════════════════════════ */}
         {status === 'complete' && (
-          <div className="max-w-xl mx-auto space-y-4">
-            {/* Success Header */}
-            <Card className="p-4 bg-green-500/5 border-green-500/20">
-              <div className="flex items-center gap-3">
-                <CheckCircle2 className="h-5 w-5 text-green-500" />
-                <div>
-                  <p className="font-medium text-foreground">Security Check Complete</p>
-                  <p className="text-sm text-muted-foreground">
-                    {emails.length} emails passed DLP verification
-                  </p>
+          <div className="mb-6">
+            <Card className="bg-card border-border overflow-hidden">
+              <div className="px-4 py-3 border-b border-border bg-secondary/30 flex justify-between items-center">
+                <h3 className="text-sm font-medium text-foreground">Recently Secured Emails</h3>
+                <div className="flex items-center gap-2 text-green-500 text-xs">
+                  <CheckCircle2 className="h-3 w-3" />
+                  <span>DLP Verified</span>
                 </div>
               </div>
-            </Card>
-            
-            {/* Compact Email List */}
-            <Card className="bg-card border-border overflow-hidden">
-              <div className="px-4 py-3 border-b border-border bg-secondary/30">
-                <h3 className="text-sm font-medium text-foreground">Recent Emails</h3>
-              </div>
-              
               <div className="divide-y divide-border">
                 {emails.map((email) => (
                   <div key={email.id} className="px-4 py-3 flex items-center gap-3">
@@ -412,8 +382,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Integration Status Cards */}
-        <div className="grid md:grid-cols-3 gap-4 mt-8">
+        <div className="grid md:grid-cols-3 gap-4">
           <IntegrationCard
             icon={<Mail className="h-5 w-5" />}
             title="Gmail"
@@ -445,7 +414,7 @@ export default function DashboardPage() {
             description="Phase 1 scope"
           />
         </div>
-      </main>
+      </div>
     </div>
   );
 }
@@ -477,50 +446,6 @@ function StepIndicator({
         {label}
       </span>
     </div>
-  );
-}
-
-function DashboardHeader({ 
-  user, 
-  isLoading 
-}: { 
-  user?: ReturnType<typeof useUser>['user']; 
-  isLoading?: boolean;
-}) {
-  return (
-    <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-      <div className="container mx-auto px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
-            <Shield className="h-5 w-5 text-primary-foreground" />
-          </div>
-          <span className="text-xl font-semibold text-foreground">EmergentOS</span>
-          <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full ml-2">
-            Phase 0
-          </span>
-        </div>
-        
-        <div className="flex items-center gap-4">
-          {isLoading ? (
-            <Skeleton className="h-9 w-9 rounded-full" />
-          ) : (
-            <>
-              <span className="text-sm text-muted-foreground hidden md:block">
-                {user?.primaryEmailAddress?.emailAddress}
-              </span>
-              <UserButton 
-                afterSignOutUrl="/"
-                appearance={{
-                  elements: {
-                    avatarBox: 'h-9 w-9 ring-2 ring-primary/20',
-                  },
-                }}
-              />
-            </>
-          )}
-        </div>
-      </div>
-    </header>
   );
 }
 

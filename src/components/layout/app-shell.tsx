@@ -8,6 +8,7 @@ import { Header } from './header';
 import { MobileNav } from './mobile-nav';
 import { CommandPalette } from './command-palette';
 import { OmniPanel } from '@/components/chat/omni-panel';
+import { HelpOverlay } from './help-overlay';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -19,6 +20,7 @@ export function AppShell({ children }: AppShellProps) {
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isOmniPanelOpen, setIsOmniPanelOpen] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
 
   // Close mobile nav on route change
   useEffect(() => {
@@ -42,18 +44,30 @@ export function AppShell({ children }: AppShellProps) {
         e.preventDefault();
         setIsSidebarCollapsed(prev => !prev);
       }
+
+      // CMD+/ - Help overlay
+      if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+        e.preventDefault();
+        setIsHelpOpen(true);
+      }
       
       // ESC - Close panels
       if (e.key === 'Escape') {
-        if (isCommandPaletteOpen) {
-          setIsCommandPaletteOpen(false);
-        }
+        if (isCommandPaletteOpen) setIsCommandPaletteOpen(false);
+        if (isHelpOpen) setIsHelpOpen(false);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCommandPaletteOpen]);
+  }, [isCommandPaletteOpen, isHelpOpen]);
+
+  // Global event to open Omni-Panel from widgets
+  useEffect(() => {
+    const handleOpenOmniPanel = () => setIsOmniPanelOpen(true);
+    window.addEventListener('open-omni-panel', handleOpenOmniPanel as EventListener);
+    return () => window.removeEventListener('open-omni-panel', handleOpenOmniPanel as EventListener);
+  }, []);
 
   // Responsive sidebar collapse
   useEffect(() => {
@@ -124,6 +138,12 @@ export function AppShell({ children }: AppShellProps) {
         isOpen={isOmniPanelOpen}
         onClose={() => setIsOmniPanelOpen(false)}
         onToggle={handleToggleOmniPanel}
+      />
+
+      {/* Help Overlay */}
+      <HelpOverlay
+        isOpen={isHelpOpen}
+        onClose={() => setIsHelpOpen(false)}
       />
     </div>
   );
