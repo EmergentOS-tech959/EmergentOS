@@ -45,6 +45,16 @@ type GoogleCalendarApiEvent = {
   attendees?: unknown[];
 };
 
+type GoogleDriveFile = {
+  id: string;
+  name: string;
+  mimeType?: string;
+  modifiedTime?: string;
+  webViewLink?: string;
+  parents?: string[];
+  md5Checksum?: string;
+};
+
 /**
  * Gmail sync (Phase 0)
  */
@@ -315,5 +325,111 @@ export const syncCalendarEvents = inngest.createFunction(
   }
 );
 
+/**
+ * Drive sync (Phase 1)
+ */
+export const syncDriveDocuments = inngest.createFunction(
+  { id: 'sync-drive-documents', name: 'Sync Drive Documents', retries: 3 },
+  { event: 'drive/connection.established' },
+  async ({ event, step }) => {
+    const { userId, connectionId } = event.data;
+    const nangoConnectionId = connectionId || userId;
+
+    await step.run('update-status-fetching-drive', async () => {
+      const { error } = await supabaseAdmin
+        .from('sync_status')
+        .upsert(
+          {
+            user_id: userId,
+            status: 'fetching',
+            current_provider: 'drive',
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id' }
+        );
+      if (error) throw error;
+    });
+
+    const files = await step.run('fetch-drive-files', async () => {
+      const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+
+      const response = await nango.proxy({
+        connectionId: nangoConnectionId,
+        providerConfigKey: 'google-drive',
+        method: 'GET',
+        endpoint: '/drive/v3/files',
+        params: {
+          q: `modifiedTime > '${since}' and trashed = false`,
+          pageSize: '50',
+          fields: 'files(id,name,mimeType,modifiedTime,webViewLink,parents,md5Checksum)',
+        },
+      });
+
+      const items: GoogleDriveFile[] = response.data?.files || [];
+      return items;
+    });
+
+    await step.run('update-status-securing-drive', async () => {
+      const { error } = await supabaseAdmin
+        .from('sync_status')
+        .upsert(
+          {
+            user_id: userId,
+            status: 'securing',
+            current_provider: 'drive',
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id' }
+        );
+      if (error) throw error;
+    });
+
+    await step.sleep('mock-drive-dlp', '2s');
+
+    await step.run('persist-drive-documents', async () => {
+      const rows = files.map((f) => ({
+        user_id: userId,
+        document_id: f.id,
+        name: f.name,
+        mime_type: f.mimeType || 'application/octet-stream',
+        folder_path: f.parents?.[0] || null,
+        modified_at: f.modifiedTime || null,
+        web_view_link: f.webViewLink || null,
+        content_hash: f.md5Checksum || null,
+        is_context_folder: false,
+      }));
+
+      if (rows.length > 0) {
+        const { error } = await supabaseAdmin
+          .from('drive_documents')
+          .upsert(rows, { onConflict: 'user_id,document_id' });
+        if (error) throw error;
+      }
+    });
+
+    await step.run('update-status-complete-drive', async () => {
+      const { error } = await supabaseAdmin
+        .from('sync_status')
+        .upsert(
+          {
+            user_id: userId,
+            status: 'complete',
+            current_provider: null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id' }
+        );
+      if (error) throw error;
+    });
+
+    return {
+      success: true,
+      userId,
+      documentsProcessed: files.length,
+      timestamp: new Date().toISOString(),
+    };
+  }
+);
+
 // Export all functions
-export const functions = [processGmailConnection, syncCalendarEvents];
+export const functions = [processGmailConnection, syncCalendarEvents, syncDriveDocuments];

@@ -140,6 +140,21 @@ export async function POST(req: NextRequest) {
         });
         console.log('Inngest event sent: calendar/connection.established');
       }
+
+      if (providerKey === 'google-drive') {
+        await upsertConnection('drive');
+        console.log(`Drive connected - Clerk userId: ${finalUserId}, Nango connectionId: ${connectionId}`);
+        await inngest.send({
+          name: 'drive/connection.established',
+          data: {
+            userId: finalUserId,
+            connectionId,
+            providerConfigKey: providerKey,
+            timestamp: new Date().toISOString(),
+          },
+        });
+        console.log('Inngest event sent: drive/connection.established');
+      }
     }
 
     // Handle sync webhook (data sync completed)

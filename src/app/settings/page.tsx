@@ -26,6 +26,7 @@ import { supabase } from '@/lib/supabase-client';
 import { toast } from 'sonner';
 import { ConnectGmail } from '@/components/ConnectGmail';
 import { ConnectCalendar } from '@/components/ConnectCalendar';
+import { ConnectDrive } from '@/components/ConnectDrive';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 interface ConnectionCardProps {
@@ -162,6 +163,18 @@ export default function SettingsPage() {
     }
   }, [refreshConnections]);
 
+  const disconnectDrive = useCallback(async () => {
+    try {
+      const res = await fetch('/api/integrations/drive/disconnect', { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to disconnect');
+      toast.success('Drive disconnected');
+      await refreshConnections();
+    } catch (e) {
+      console.error(e);
+      toast.error('Failed to disconnect Drive');
+    }
+  }, [refreshConnections]);
+
   return (
     <div className="space-y-6 max-w-4xl">
       {/* Header */}
@@ -257,9 +270,13 @@ export default function SettingsPage() {
             icon={<FileText className="h-5 w-5 text-primary" />}
             status={connectionStatus.drive}
             action={
-              <Button variant="outline" size="sm" disabled>
-                Coming soon
-              </Button>
+              connectionStatus.drive === 'connected' ? (
+                <Button variant="outline" size="sm" onClick={disconnectDrive}>
+                  Disconnect
+                </Button>
+              ) : (
+                <ConnectDrive onConnectionSuccess={refreshConnections} />
+              )
             }
           />
         </TabsContent>
