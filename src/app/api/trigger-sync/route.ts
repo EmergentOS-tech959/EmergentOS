@@ -14,7 +14,7 @@ import { inngest } from '@/lib/inngest';
  * 
  * In production, this should be removed or protected with admin auth.
  */
-export async function POST(req: NextRequest) {
+export async function POST(_req: NextRequest) {
   try {
     // Get the authenticated user from Clerk
     const { userId } = await auth();

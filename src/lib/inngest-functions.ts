@@ -26,12 +26,13 @@ interface GmailHeader {
   value: string;
 }
 
-interface GmailMessageDetail {
-  id: string;
-  payload: {
-    headers: GmailHeader[];
-  };
-}
+// GmailMessageDetail interface - kept for future use with full message parsing
+// interface GmailMessageDetail {
+//   id: string;
+//   payload: {
+//     headers: GmailHeader[];
+//   };
+// }
 
 interface ParsedEmail {
   id: string;

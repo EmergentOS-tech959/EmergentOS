@@ -7,7 +7,7 @@ import { Nango } from '@nangohq/node';
  * Creates a Nango connect session token for the authenticated user
  * This token is used by the frontend to initiate OAuth flows
  */
-export async function POST(req: NextRequest) {
+export async function POST(_req: NextRequest) {
   try {
     // Get the authenticated user from Clerk
     const { userId } = await auth();
@@ -47,14 +47,15 @@ export async function POST(req: NextRequest) {
       sessionToken: response.data.token,
       expiresAt: response.data.expires_at,
     });
-  } catch (error: any) {
-    console.error('Error creating Nango connect session:', error?.message || error);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Error creating Nango connect session:', errorMessage);
     console.error('Full error:', JSON.stringify(error, null, 2));
     
     return NextResponse.json(
       { 
         error: 'Failed to create connect session',
-        details: error?.message || 'Unknown error'
+        details: errorMessage
       },
       { status: 500 }
     );

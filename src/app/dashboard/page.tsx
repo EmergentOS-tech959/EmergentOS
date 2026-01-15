@@ -43,13 +43,11 @@ export default function DashboardPage() {
   };
 
   // Fetch current sync status from Supabase
-  const fetchStatus = useCallback(async () => {
-    if (!user?.id) return;
-    
+  const fetchStatus = useCallback(async (userId: string) => {
     const { data, error } = await supabase
       .from('sync_status')
       .select('status, updated_at')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .maybeSingle<{ status: string; updated_at: string }>();
     
     if (error) {
@@ -69,7 +67,7 @@ export default function DashboardPage() {
           console.log('Stale status detected, resetting to disconnected');
           setStatus('disconnected');
           // Clean up stale data
-          await supabase.from('sync_status').delete().eq('user_id', user.id);
+          await supabase.from('sync_status').delete().eq('user_id', userId);
           return;
         }
       }
@@ -78,16 +76,14 @@ export default function DashboardPage() {
     } else {
       setStatus('disconnected');
     }
-  }, [user?.id]);
+  }, []);
 
   // Fetch emails from Supabase
-  const fetchEmails = useCallback(async () => {
-    if (!user?.id) return;
-    
+  const fetchEmails = useCallback(async (userId: string) => {
     const { data, error } = await supabase
       .from('emails')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(5);
     
@@ -99,15 +95,27 @@ export default function DashboardPage() {
     if (data) {
       setEmails(data as Email[]);
     }
-  }, [user?.id]);
+  }, []);
 
   // Set up initial fetch and realtime subscription
   useEffect(() => {
     if (!user?.id) return;
 
-    // Initial fetch
-    fetchStatus();
-    fetchEmails();
+    const userId = user.id;
+    let isMounted = true;
+
+    // Initial fetch - wrapped in async IIFE with mount check
+    const initFetch = async () => {
+      if (!isMounted) return;
+      await fetchStatus(userId);
+      if (!isMounted) return;
+      await fetchEmails(userId);
+    };
+    
+    // Schedule the fetch on next tick to avoid synchronous setState warning
+    const timeoutId = setTimeout(() => {
+      void initFetch();
+    }, 0);
 
     // Subscribe to sync_status changes
     const statusChannel = supabase
@@ -128,7 +136,7 @@ export default function DashboardPage() {
             
             // Fetch emails when status changes to complete
             if (newStatus === 'complete') {
-              fetchEmails();
+              void fetchEmails(userId);
             }
           }
         }
@@ -147,12 +155,14 @@ export default function DashboardPage() {
           filter: `user_id=eq.${user.id}`,
         },
         () => {
-          fetchEmails();
+          void fetchEmails(userId);
         }
       )
       .subscribe();
 
     return () => {
+      isMounted = false;
+      clearTimeout(timeoutId);
       supabase.removeChannel(statusChannel);
       supabase.removeChannel(emailsChannel);
     };
@@ -244,7 +254,7 @@ export default function DashboardPage() {
               </h2>
               <p className="text-muted-foreground mb-6 max-w-md">
                 Connect your Google account to test the architectural pipeline.
-                We'll fetch your last 5 emails through the secure DLP gate.
+                We&apos;ll fetch your last 5 emails through the secure DLP gate.
               </p>
               
               {/* REAL Nango OAuth Connection */}
@@ -350,7 +360,7 @@ export default function DashboardPage() {
               </div>
               
               <p className="text-xs text-muted-foreground mt-6 font-mono">
-                Inngest → step.run('nightfall-dlp-scan')
+                Inngest → step.run(&apos;nightfall-dlp-scan&apos;)
               </p>
             </div>
           </Card>

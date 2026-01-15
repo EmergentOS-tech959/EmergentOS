@@ -48,9 +48,13 @@ export async function POST(req: NextRequest) {
           console.log('Nango connection details:', JSON.stringify(connection, null, 2));
           
           // The end_user.id should be in the connection metadata
-          clerkUserId = (connection as any).end_user?.id || 
-                        (connection as any).endUser?.id ||
-                        (connection as any).metadata?.clerk_user_id;
+          const conn = connection as Record<string, unknown>;
+          const endUser = conn.end_user as Record<string, unknown> | undefined;
+          const endUserAlt = conn.endUser as Record<string, unknown> | undefined;
+          const metadata = conn.metadata as Record<string, unknown> | undefined;
+          clerkUserId = endUser?.id as string | undefined || 
+                        endUserAlt?.id as string | undefined ||
+                        metadata?.clerk_user_id as string | undefined;
           
           console.log('clerkUserId from Nango API:', clerkUserId);
         } catch (nangoError) {
@@ -113,7 +117,7 @@ export async function POST(req: NextRequest) {
 }
 
 // Also handle GET for webhook verification
-export async function GET(req: NextRequest) {
+export async function GET(_req: NextRequest) {
   return NextResponse.json({ 
     status: 'Nango webhook endpoint active',
     timestamp: new Date().toISOString(),
