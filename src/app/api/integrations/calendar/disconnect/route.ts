@@ -44,9 +44,17 @@ export async function POST() {
     const nango = new Nango({ secretKey: nangoSecretKey });
     await nango.deleteConnection('google-calendar', String(connectionId));
 
-    // Remove local mapping + calendar events
+    // Remove local mapping + calendar events + calendar insights + embeddings
     await supa.from('connections').delete().eq('provider', 'calendar').eq('connection_id', String(connectionId));
     await supa.from('calendar_events').delete().eq('user_id', userId);
+    await supa.from('calendar_insights').delete().eq('user_id', userId);
+    // Also delete embeddings from this source
+    await supa.from('embeddings').delete().eq('user_id', userId).eq('source_type', 'calendar');
+    
+    // CRITICAL: Delete today's briefing so stale Calendar data isn't shown
+    // A new briefing will be regenerated without Calendar data
+    const today = new Date().toISOString().split('T')[0];
+    await supa.from('briefings').delete().eq('user_id', userId).eq('date', today);
 
     return NextResponse.json({ success: true });
   } catch (error) {

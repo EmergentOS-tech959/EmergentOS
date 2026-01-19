@@ -84,13 +84,15 @@ export async function POST(req: NextRequest) {
 
       const upsertConnection = async (providerName: string) => {
         type ConnectionInsert = Database['public']['Tables']['connections']['Insert'];
+        const now = new Date().toISOString();
         const payload: ConnectionInsert = {
           user_id: String(finalUserId),
           provider: providerName,
           connection_id: String(connectionId),
           status: 'connected',
           metadata: { clerk_user_id: String(finalUserId) },
-          updated_at: new Date().toISOString(),
+          updated_at: now,
+          last_sync_at: now, // CRITICAL: Set initial sync time so UI doesn't show "Never synced"
         };
 
         const connectionsClient = supabaseAdmin as SupabaseClient<Database>;

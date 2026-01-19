@@ -44,6 +44,13 @@ export async function POST() {
 
     await supa.from('connections').delete().eq('provider', 'gmail').eq('connection_id', String(connectionId));
     await supa.from('emails').delete().eq('user_id', userId);
+    // Also delete embeddings from this source
+    await supa.from('embeddings').delete().eq('user_id', userId).eq('source_type', 'gmail');
+    
+    // CRITICAL: Delete today's briefing so stale Gmail data isn't shown
+    // A new briefing will be regenerated without Gmail data
+    const today = new Date().toISOString().split('T')[0];
+    await supa.from('briefings').delete().eq('user_id', userId).eq('date', today);
 
     return NextResponse.json({ success: true });
   } catch (error) {

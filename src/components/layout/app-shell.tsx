@@ -7,8 +7,9 @@ import { Sidebar } from './sidebar';
 import { Header } from './header';
 import { MobileNav } from './mobile-nav';
 import { CommandPalette } from './command-palette';
-import { OmniPanel } from '@/components/chat/omni-panel';
+import { OmniPanel, OmniPanelButton } from '@/components/chat/omni-panel';
 import { HelpOverlay } from './help-overlay';
+import { SyncManagerProvider } from '@/lib/sync-manager';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -62,7 +63,7 @@ export function AppShell({ children }: AppShellProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isCommandPaletteOpen, isHelpOpen]);
 
-  // Global event to open Omni-Panel from widgets
+  // Global event to open Omni-Panel from anywhere
   useEffect(() => {
     const handleOpenOmniPanel = () => setIsOmniPanelOpen(true);
     window.addEventListener('open-omni-panel', handleOpenOmniPanel as EventListener);
@@ -86,65 +87,65 @@ export function AppShell({ children }: AppShellProps) {
     setIsCommandPaletteOpen(true);
   }, []);
 
-  const handleToggleOmniPanel = useCallback(() => {
-    setIsOmniPanelOpen(prev => !prev);
-  }, []);
-
   return (
-    <div className="min-h-screen bg-background">
-      {/* Desktop Sidebar */}
-      <div className="hidden md:block">
-        <Sidebar
-          isCollapsed={isSidebarCollapsed}
-          onToggle={() => setIsSidebarCollapsed(prev => !prev)}
+    <SyncManagerProvider>
+      <div className="min-h-screen bg-background">
+        {/* Desktop Sidebar */}
+        <div className="hidden md:block">
+          <Sidebar
+            isCollapsed={isSidebarCollapsed}
+            onToggle={() => setIsSidebarCollapsed(prev => !prev)}
+            onOpenCommandPalette={handleOpenCommandPalette}
+          />
+        </div>
+
+        {/* Mobile Navigation */}
+        <MobileNav
+          isOpen={isMobileNavOpen}
+          onClose={() => setIsMobileNavOpen(false)}
           onOpenCommandPalette={handleOpenCommandPalette}
         />
-      </div>
 
-      {/* Mobile Navigation */}
-      <MobileNav
-        isOpen={isMobileNavOpen}
-        onClose={() => setIsMobileNavOpen(false)}
-        onOpenCommandPalette={handleOpenCommandPalette}
-      />
+        {/* Main Content Area */}
+        <div
+          className={cn(
+            'flex flex-col min-h-screen transition-all duration-300',
+            'md:ml-60',
+            isSidebarCollapsed && 'md:ml-16'
+          )}
+        >
+          <Header
+            onOpenCommandPalette={handleOpenCommandPalette}
+            onOpenMobileNav={() => setIsMobileNavOpen(true)}
+          />
 
-      {/* Main Content Area */}
-      <div
-        className={cn(
-          'flex flex-col min-h-screen transition-all duration-300',
-          'md:ml-60',
-          isSidebarCollapsed && 'md:ml-16'
+          <main className="flex-1 p-4 md:p-6">
+            {children}
+          </main>
+        </div>
+
+        {/* Command Palette */}
+        <CommandPalette
+          isOpen={isCommandPaletteOpen}
+          onClose={() => setIsCommandPaletteOpen(false)}
+        />
+
+        {/* Omni-Panel (Chat) */}
+        {isOmniPanelOpen ? (
+          <OmniPanel
+            isOpen={isOmniPanelOpen}
+            onClose={() => setIsOmniPanelOpen(false)}
+          />
+        ) : (
+          <OmniPanelButton onClick={() => setIsOmniPanelOpen(true)} />
         )}
-      >
-        <Header
-          onOpenCommandPalette={handleOpenCommandPalette}
-          onOpenMobileNav={() => setIsMobileNavOpen(true)}
-          onToggleOmniPanel={handleToggleOmniPanel}
+
+        {/* Help Overlay */}
+        <HelpOverlay
+          isOpen={isHelpOpen}
+          onClose={() => setIsHelpOpen(false)}
         />
-
-        <main className="flex-1 p-4 md:p-6">
-          {children}
-        </main>
       </div>
-
-      {/* Command Palette */}
-      <CommandPalette
-        isOpen={isCommandPaletteOpen}
-        onClose={() => setIsCommandPaletteOpen(false)}
-      />
-
-      {/* Omni-Panel (Chat Interface) */}
-      <OmniPanel
-        isOpen={isOmniPanelOpen}
-        onClose={() => setIsOmniPanelOpen(false)}
-        onToggle={handleToggleOmniPanel}
-      />
-
-      {/* Help Overlay */}
-      <HelpOverlay
-        isOpen={isHelpOpen}
-        onClose={() => setIsHelpOpen(false)}
-      />
-    </div>
+    </SyncManagerProvider>
   );
 }

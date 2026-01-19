@@ -22,18 +22,17 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { supabase } from '@/lib/supabase-client';
 import { toast } from 'sonner';
 import { ConnectGmail } from '@/components/ConnectGmail';
 import { ConnectCalendar } from '@/components/ConnectCalendar';
 import { ConnectDrive } from '@/components/ConnectDrive';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { useSyncManager, type ProviderKey } from '@/lib/sync-manager';
 
 interface ConnectionCardProps {
   name: string;
   description: string;
   icon: React.ReactNode;
-  status: 'connected' | 'disconnected' | 'error';
+  status: 'connected' | 'disconnected' | 'error' | 'connecting';
   lastSync?: string;
   itemCount?: number;
   action: React.ReactNode;
@@ -79,6 +78,12 @@ function ConnectionCard({
               <span>Connected</span>
             </div>
           )}
+          {status === 'connecting' && (
+            <div className="flex items-center gap-1 text-xs text-status-amber">
+              <Clock className="h-3 w-3" />
+              <span>Connecting…</span>
+            </div>
+          )}
           {status === 'disconnected' && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <XCircle className="h-3 w-3" />
@@ -100,40 +105,191 @@ function ConnectionCard({
 
 export default function SettingsPage() {
   const { user } = useUser();
+  // CRITICAL: Use SyncManager for connection handling - triggers sync on connect
+  const { onProviderConnected, onProviderDisconnected } = useSyncManager();
+  
   const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'disconnected' | 'error'>>({
     gmail: 'disconnected',
     calendar: 'disconnected',
     drive: 'disconnected',
   });
+  const [pending, setPending] = useState<Record<string, boolean>>({
+    gmail: false,
+    calendar: false,
+    drive: false,
+  });
+  const [pendingUntil, setPendingUntil] = useState<Record<string, number | null>>({
+    gmail: null,
+    calendar: null,
+    drive: null,
+  });
+  const [flashConnected, setFlashConnected] = useState<Record<string, boolean>>({
+    gmail: false,
+    calendar: false,
+    drive: false,
+  });
 
   const refreshConnections = useCallback(async () => {
     if (!user?.id) return;
-    const supa = supabase as unknown as SupabaseClient;
-    const { data, error } = await supa
-      .from('connections')
-      .select('provider,status,user_id,metadata')
-      .or(`user_id.eq.${user.id},metadata->>clerk_user_id.eq.${user.id}`);
+    try {
+      const res = await fetch('/api/connections', { method: 'GET', cache: 'no-store' });
+      const body = (await res.json().catch(() => ({}))) as {
+        connections?: Record<string, { status?: 'connected' | 'disconnected' | 'error' }>;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(body?.error || 'Failed to load connections');
 
-    if (error) {
-      console.error('Failed to load connections', error);
-      return;
+      const next = { gmail: 'disconnected', calendar: 'disconnected', drive: 'disconnected' } as Record<
+        string,
+        'connected' | 'disconnected' | 'error'
+      >;
+      const c = body.connections || {};
+      for (const k of Object.keys(next)) {
+        const s = c?.[k]?.status;
+        if (s === 'connected' || s === 'error' || s === 'disconnected') next[k] = s;
+      }
+      setConnectionStatus((prev) => {
+        // Flash "Connected!" on transition (not-connected -> connected), then revert to normal disconnect button.
+        for (const k of Object.keys(next)) {
+          if (prev[k] !== 'connected' && next[k] === 'connected') {
+            setFlashConnected((f) => ({ ...f, [k]: true }));
+            window.setTimeout(() => setFlashConnected((f) => ({ ...f, [k]: false })), 2000);
+          }
+        }
+        // Clear pending if provider is now connected (or errored)
+        setPending((p) => ({
+          gmail: next.gmail === 'connected' || next.gmail === 'error' ? false : p.gmail,
+          calendar: next.calendar === 'connected' || next.calendar === 'error' ? false : p.calendar,
+          drive: next.drive === 'connected' || next.drive === 'error' ? false : p.drive,
+        }));
+        setPendingUntil((u) => ({
+          gmail: next.gmail === 'connected' || next.gmail === 'error' ? null : u.gmail,
+          calendar: next.calendar === 'connected' || next.calendar === 'error' ? null : u.calendar,
+          drive: next.drive === 'connected' || next.drive === 'error' ? null : u.drive,
+        }));
+        return next;
+      });
+    } catch (e) {
+      console.error('Failed to load connections', e);
     }
-
-    const next = { gmail: 'disconnected', calendar: 'disconnected', drive: 'disconnected' } as Record<
-      string,
-      'connected' | 'disconnected' | 'error'
-    >;
-
-    for (const row of (data || []) as unknown[]) {
-      const r = row as { provider?: string; status?: string };
-      const provider = r.provider;
-      const status = r.status === 'connected' ? 'connected' : r.status === 'error' ? 'error' : 'disconnected';
-      if (!provider) continue;
-      if (provider in next) next[provider] = status;
-    }
-
-    setConnectionStatus(next);
   }, [user?.id]);
+
+  const markConnecting = useCallback((provider: 'gmail' | 'calendar' | 'drive') => {
+    setPending((p) => ({ ...p, [provider]: true }));
+    setPendingUntil((u) => ({ ...u, [provider]: Date.now() + 30_000 }));
+  }, []);
+
+  // CRITICAL: Handler for when a provider successfully connects
+  // This calls onProviderConnected which triggers a sync
+  // NOTE: We must wait for the Nango webhook to fire (creates DB row) before syncing
+  // If webhook fails, we create the connection directly via a fallback API
+  const handleProviderConnected = useCallback(
+    async (provider: ProviderKey) => {
+      // Poll for connection to appear in DB (webhook might take a few seconds)
+      const maxAttempts = 8;
+      const pollInterval = 1000; // 1 second
+      
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        await refreshConnections();
+        
+        // Check if connection is now confirmed in DB
+        const res = await fetch('/api/connections', { cache: 'no-store' });
+        const body = await res.json().catch(() => ({}));
+        const status = body?.connections?.[provider]?.status;
+        
+        if (status === 'connected') {
+          console.log(`Provider ${provider} confirmed in DB after ${attempt + 1} attempts`);
+          
+          // CRITICAL: Clear pending state BEFORE triggering sync
+          setPending((p) => ({ ...p, [provider]: false }));
+          setPendingUntil((u) => ({ ...u, [provider]: null }));
+          
+          // Show brief "Connected!" flash
+          setFlashConnected((f) => ({ ...f, [provider]: true }));
+          setTimeout(() => setFlashConnected((f) => ({ ...f, [provider]: false })), 2000);
+          
+          // Connection confirmed - now trigger sync
+          await onProviderConnected(provider);
+          
+          // Final refresh to ensure UI is up to date
+          await refreshConnections();
+          return;
+        }
+        
+        // Wait before next attempt
+        await new Promise((r) => setTimeout(r, pollInterval));
+      }
+      
+      // FALLBACK: Webhook didn't create the connection - create it directly
+      // This handles the case where Nango webhook fails to get user details
+      console.log(`Provider ${provider} not confirmed by webhook, attempting direct creation...`);
+      try {
+        const createRes = await fetch('/api/nango/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider }),
+        });
+        const createBody = await createRes.json().catch(() => ({}));
+        
+        if (createRes.ok && createBody.success) {
+          console.log(`Provider ${provider} created directly via fallback`);
+          
+          setPending((p) => ({ ...p, [provider]: false }));
+          setPendingUntil((u) => ({ ...u, [provider]: null }));
+          setFlashConnected((f) => ({ ...f, [provider]: true }));
+          setTimeout(() => setFlashConnected((f) => ({ ...f, [provider]: false })), 2000);
+          
+          await onProviderConnected(provider);
+          await refreshConnections();
+          return;
+        }
+      } catch (err) {
+        console.error('Fallback connection creation failed:', err);
+      }
+      
+      // If we get here, connection wasn't confirmed and fallback failed
+      console.warn(`Provider ${provider} could not be confirmed or created`);
+      setPending((p) => ({ ...p, [provider]: false }));
+      setPendingUntil((u) => ({ ...u, [provider]: null }));
+      toast.warning('Connection is taking longer than expected. Please refresh and try syncing.');
+    },
+    [refreshConnections, onProviderConnected]
+  );
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const anyPending = pending.gmail || pending.calendar || pending.drive;
+    if (!anyPending) return;
+
+    const interval = window.setInterval(() => {
+      void refreshConnections();
+
+      const now = Date.now();
+      const timedOutProviders: Array<'gmail' | 'calendar' | 'drive'> = [];
+      (['gmail', 'calendar', 'drive'] as const).forEach((p) => {
+        const until = pendingUntil[p];
+        if (pending[p] && typeof until === 'number' && now > until) timedOutProviders.push(p);
+      });
+
+      if (timedOutProviders.length > 0) {
+        setPending((prev) => {
+          const next = { ...prev };
+          for (const p of timedOutProviders) next[p] = false;
+          return next;
+        });
+        setPendingUntil((prev) => {
+          const next = { ...prev };
+          for (const p of timedOutProviders) next[p] = null;
+          return next;
+        });
+        toast.warning('Connection is taking longer than expected', {
+          description: 'The OAuth succeeded, but the webhook has not confirmed the connection yet. Please refresh and try again.',
+        });
+      }
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [pending, pendingUntil, refreshConnections, user?.id]);
 
   useEffect(() => {
     void refreshConnections();
@@ -144,36 +300,42 @@ export default function SettingsPage() {
       const res = await fetch('/api/integrations/calendar/disconnect', { method: 'POST' });
       if (!res.ok) throw new Error('Failed to disconnect');
       toast.success('Calendar disconnected');
+      // CRITICAL: Notify SyncManager of disconnection (updates state, regenerates briefing)
+      await onProviderDisconnected('calendar');
       await refreshConnections();
     } catch (e) {
       console.error(e);
       toast.error('Failed to disconnect calendar');
     }
-  }, [refreshConnections]);
+  }, [refreshConnections, onProviderDisconnected]);
 
   const disconnectGmail = useCallback(async () => {
     try {
       const res = await fetch('/api/integrations/gmail/disconnect', { method: 'POST' });
       if (!res.ok) throw new Error('Failed to disconnect');
       toast.success('Gmail disconnected');
+      // CRITICAL: Notify SyncManager of disconnection (updates state, regenerates briefing)
+      await onProviderDisconnected('gmail');
       await refreshConnections();
     } catch (e) {
       console.error(e);
       toast.error('Failed to disconnect Gmail');
     }
-  }, [refreshConnections]);
+  }, [refreshConnections, onProviderDisconnected]);
 
   const disconnectDrive = useCallback(async () => {
     try {
       const res = await fetch('/api/integrations/drive/disconnect', { method: 'POST' });
       if (!res.ok) throw new Error('Failed to disconnect');
       toast.success('Drive disconnected');
+      // CRITICAL: Notify SyncManager of disconnection (updates state, regenerates briefing)
+      await onProviderDisconnected('drive');
       await refreshConnections();
     } catch (e) {
       console.error(e);
       toast.error('Failed to disconnect Drive');
     }
-  }, [refreshConnections]);
+  }, [refreshConnections, onProviderDisconnected]);
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -238,14 +400,22 @@ export default function SettingsPage() {
             name="Gmail"
             description="Access your email for AI insights"
             icon={<Mail className="h-5 w-5 text-primary" />}
-            status={connectionStatus.gmail}
+            status={pending.gmail ? 'connecting' : connectionStatus.gmail}
             action={
               connectionStatus.gmail === 'connected' ? (
-                <Button variant="outline" size="sm" onClick={disconnectGmail}>
-                  Disconnect
-                </Button>
+                flashConnected.gmail ? (
+                  <div className="text-xs text-status-green font-medium">Connected!</div>
+                ) : (
+                  <Button variant="outline" size="sm" onClick={disconnectGmail}>
+                    Disconnect
+                  </Button>
+                )
               ) : (
-                <ConnectGmail onConnectionSuccess={refreshConnections} />
+                <ConnectGmail
+                  onConnectionStart={() => markConnecting('gmail')}
+                  onConnectionSuccess={() => void handleProviderConnected('gmail')}
+                  onConnectionError={() => setPending((p) => ({ ...p, gmail: false }))}
+                />
               )
             }
           />
@@ -253,14 +423,22 @@ export default function SettingsPage() {
             name="Google Calendar"
             description="Sync your calendar events"
             icon={<Calendar className="h-5 w-5 text-primary" />}
-            status={connectionStatus.calendar}
+            status={pending.calendar ? 'connecting' : connectionStatus.calendar}
             action={
               connectionStatus.calendar === 'connected' ? (
-                <Button variant="outline" size="sm" onClick={disconnectCalendar}>
-                  Disconnect
-                </Button>
+                flashConnected.calendar ? (
+                  <div className="text-xs text-status-green font-medium">Connected!</div>
+                ) : (
+                  <Button variant="outline" size="sm" onClick={disconnectCalendar}>
+                    Disconnect
+                  </Button>
+                )
               ) : (
-                <ConnectCalendar onConnectionSuccess={refreshConnections} />
+                <ConnectCalendar
+                  onConnectionStart={() => markConnecting('calendar')}
+                  onConnectionSuccess={() => void handleProviderConnected('calendar')}
+                  onConnectionError={() => setPending((p) => ({ ...p, calendar: false }))}
+                />
               )
             }
           />
@@ -268,14 +446,22 @@ export default function SettingsPage() {
             name="Google Drive"
             description="Access your documents for context"
             icon={<FileText className="h-5 w-5 text-primary" />}
-            status={connectionStatus.drive}
+            status={pending.drive ? 'connecting' : connectionStatus.drive}
             action={
               connectionStatus.drive === 'connected' ? (
-                <Button variant="outline" size="sm" onClick={disconnectDrive}>
-                  Disconnect
-                </Button>
+                flashConnected.drive ? (
+                  <div className="text-xs text-status-green font-medium">Connected!</div>
+                ) : (
+                  <Button variant="outline" size="sm" onClick={disconnectDrive}>
+                    Disconnect
+                  </Button>
+                )
               ) : (
-                <ConnectDrive onConnectionSuccess={refreshConnections} />
+                <ConnectDrive
+                  onConnectionStart={() => markConnecting('drive')}
+                  onConnectionSuccess={() => void handleProviderConnected('drive')}
+                  onConnectionError={() => setPending((p) => ({ ...p, drive: false }))}
+                />
               )
             }
           />

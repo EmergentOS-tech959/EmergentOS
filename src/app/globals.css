@@ -125,7 +125,7 @@
   --sidebar-accent-foreground: #0D1117;
   --sidebar-border: #e2e8f0;
   --sidebar-ring: #4ECDC4;
-  
+
   /* === EmergentOS Brand Colors === */
   --human-blue: #4C7388;
   --ai-copper: #D29674;
@@ -417,7 +417,7 @@
   background-color: rgba(255, 193, 7, 0.1);
   color: var(--status-amber);
   border-color: rgba(255, 193, 7, 0.2);
-}
+  }
 
 .status-error {
   background-color: rgba(220, 53, 69, 0.1);

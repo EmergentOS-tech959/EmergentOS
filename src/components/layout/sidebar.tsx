@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
-import { Separator } from '@/components/ui/separator';
+import { SourceIndicators } from './source-indicators';
 
 interface SidebarItem {
   id: string;
@@ -31,6 +31,7 @@ interface SidebarItem {
   action?: () => void;
   badge?: string | number;
   isLocked?: boolean;
+  color?: string;
 }
 
 interface SidebarProps {
@@ -43,18 +44,17 @@ export function Sidebar({ isCollapsed, onToggle, onOpenCommandPalette }: Sidebar
   const pathname = usePathname();
 
   const handleLockedClick = (label: string) => {
-    toast.info(`${label} is locked in Alpha Phase`, {
-      description: 'This feature will be available in Phase 2.',
-      duration: 3000,
+    toast.info(`${label} — Coming in Phase 2`, {
+      description: 'This feature is not available yet.',
+      duration: 2500,
     });
   };
 
   const sidebarItems: SidebarItem[] = [
-    // Core Navigation (Active)
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
-    { id: 'search', label: 'Search', icon: Search, action: onOpenCommandPalette },
-    { id: 'inbox', label: 'Unified Inbox', icon: Inbox, href: '/inbox', badge: 'new' },
-    { id: 'resources', label: 'Resources', icon: FolderOpen, href: '/resources' },
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard', color: 'text-teal-400' },
+    { id: 'search', label: 'Search', icon: Search, action: onOpenCommandPalette, color: 'text-blue-400' },
+    { id: 'inbox', label: 'Unified Inbox', icon: Inbox, href: '/inbox', badge: 'new', color: 'text-purple-400' },
+    { id: 'resources', label: 'Resources', icon: FolderOpen, href: '/resources', color: 'text-green-400' },
   ];
 
   const lockedItems: SidebarItem[] = [
@@ -66,7 +66,7 @@ export function Sidebar({ isCollapsed, onToggle, onOpenCommandPalette }: Sidebar
   ];
 
   const settingsItems: SidebarItem[] = [
-    { id: 'settings', label: 'Settings', icon: Settings, href: '/settings' },
+    { id: 'settings', label: 'Settings', icon: Settings, href: '/settings', color: 'text-gray-400' },
   ];
 
   const renderNavItem = (item: SidebarItem) => {
@@ -76,28 +76,44 @@ export function Sidebar({ isCollapsed, onToggle, onOpenCommandPalette }: Sidebar
     const itemContent = (
       <div
         className={cn(
-          'flex items-center gap-3 px-3 py-2 rounded transition-colors-fast cursor-pointer',
-          'hover:bg-secondary',
-          isActive && 'bg-secondary text-primary',
-          item.isLocked && 'opacity-50 cursor-not-allowed',
+          'group flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 cursor-pointer',
+          'hover:bg-[#21262d]',
+          isActive && 'bg-[#21262d] shadow-sm',
+          item.isLocked && 'opacity-40 cursor-not-allowed hover:bg-transparent',
           isCollapsed && 'justify-center px-2'
         )}
       >
-        <div className="relative">
-          <Icon className={cn('h-5 w-5', isActive && 'text-primary')} />
+        <div className={cn(
+          'relative flex items-center justify-center w-8 h-8 rounded-lg transition-colors',
+          isActive ? 'bg-teal-500/10' : 'bg-transparent group-hover:bg-[#30363d]'
+        )}>
+          <Icon className={cn(
+            'h-[18px] w-[18px] transition-colors',
+            isActive ? (item.color || 'text-teal-400') : 'text-gray-400 group-hover:text-gray-300',
+            item.isLocked && 'text-gray-600'
+          )} />
           {item.isLocked && !isCollapsed && (
-            <Lock className="h-2.5 w-2.5 absolute -top-1 -right-1 text-muted-foreground" />
+            <Lock className="h-2 w-2 absolute -top-0.5 -right-0.5 text-gray-600" />
           )}
         </div>
         {!isCollapsed && (
           <>
-            <span className={cn('flex-1 text-sm', isActive && 'font-medium')}>
+            <span className={cn(
+              'flex-1 text-[13px] font-medium transition-colors',
+              isActive ? 'text-white' : 'text-gray-400 group-hover:text-gray-200',
+              item.isLocked && 'text-gray-600'
+            )}>
               {item.label}
             </span>
             {item.badge && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-teal-500/20 text-teal-400 font-medium uppercase">
                 {item.badge}
               </span>
+            )}
+            {item.id === 'search' && (
+              <kbd className="hidden lg:flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-[#30363d] text-gray-500 font-mono">
+                <span className="text-[9px]">⌘</span>K
+              </kbd>
             )}
           </>
         )}
@@ -110,8 +126,9 @@ export function Sidebar({ isCollapsed, onToggle, onOpenCommandPalette }: Sidebar
           {isCollapsed ? (
             <Tooltip>
               <TooltipTrigger asChild>{itemContent}</TooltipTrigger>
-              <TooltipContent side="right">
-                <p>{item.label} (Locked)</p>
+              <TooltipContent side="right" className="bg-[#21262d] border-[#30363d]">
+                <p className="text-gray-300">{item.label}</p>
+                <p className="text-[10px] text-gray-500">Coming soon</p>
               </TooltipContent>
             </Tooltip>
           ) : (
@@ -127,11 +144,11 @@ export function Sidebar({ isCollapsed, onToggle, onOpenCommandPalette }: Sidebar
           {isCollapsed ? (
             <Tooltip>
               <TooltipTrigger asChild>{itemContent}</TooltipTrigger>
-              <TooltipContent side="right" className="flex items-center gap-2">
-                <p>{item.label}</p>
+              <TooltipContent side="right" className="flex items-center gap-2 bg-[#21262d] border-[#30363d]">
+                <p className="text-gray-300">{item.label}</p>
                 {item.id === 'search' && (
-                  <kbd className="pointer-events-none h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium opacity-100 flex">
-                    <span className="text-xs">⌘</span>K
+                  <kbd className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-[#30363d] text-gray-500">
+                    <span className="text-[9px]">⌘</span>K
                   </kbd>
                 )}
               </TooltipContent>
@@ -149,8 +166,8 @@ export function Sidebar({ isCollapsed, onToggle, onOpenCommandPalette }: Sidebar
           {isCollapsed ? (
             <Tooltip>
               <TooltipTrigger asChild>{itemContent}</TooltipTrigger>
-              <TooltipContent side="right">
-                <p>{item.label}</p>
+              <TooltipContent side="right" className="bg-[#21262d] border-[#30363d]">
+                <p className="text-gray-300">{item.label}</p>
               </TooltipContent>
             </Tooltip>
           ) : (
@@ -167,49 +184,68 @@ export function Sidebar({ isCollapsed, onToggle, onOpenCommandPalette }: Sidebar
     <TooltipProvider delayDuration={0}>
       <aside
         className={cn(
-          'fixed left-0 top-0 z-40 h-screen bg-sidebar border-r border-sidebar-border',
+          'fixed left-0 top-0 z-40 h-screen bg-[#0d1117] border-r border-[#30363d]',
           'flex flex-col transition-all duration-300 ease-out',
-          isCollapsed ? 'w-16' : 'w-60'
+          isCollapsed ? 'w-[68px]' : 'w-[240px]'
         )}
       >
         {/* Logo */}
         <div className={cn(
-          'flex items-center h-14 px-3 border-b border-sidebar-border',
-          isCollapsed ? 'justify-center' : 'gap-2'
+          'flex items-center h-14 px-3 border-b border-[#30363d]',
+          isCollapsed ? 'justify-center' : 'gap-3'
         )}>
-          <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
-            <span className="text-primary-foreground font-bold text-sm">E</span>
+          <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-teal-500 to-teal-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-teal-500/20">
+            <span className="text-white font-bold text-sm">E</span>
           </div>
           {!isCollapsed && (
-            <div className="flex flex-col">
-              <span className="text-sm font-semibold text-foreground">EmergentOS</span>
-              <span className="text-[10px] text-muted-foreground">Phase 1 Alpha</span>
+            <div className="flex flex-col min-w-0">
+              <span className="text-sm font-semibold text-white truncate">EmergentOS</span>
+              <span className="text-[10px] text-gray-500">Phase 1 Alpha</span>
             </div>
           )}
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto eos-scrollbar">
-          {sidebarItems.map(renderNavItem)}
+        <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
+          {/* Main Items */}
+          <div className="space-y-0.5">
+            {sidebarItems.map(renderNavItem)}
+          </div>
           
-          <Separator className="my-4" />
+          {/* Separator */}
+          <div className="my-3 mx-2 border-t border-[#30363d]" />
           
-          {lockedItems.map(renderNavItem)}
+          {/* Locked Items */}
+          <div className="space-y-0.5">
+            {!isCollapsed && (
+              <p className="px-3 py-1 text-[9px] uppercase tracking-wider text-gray-600 font-medium">
+                Coming Soon
+              </p>
+            )}
+            {lockedItems.map(renderNavItem)}
+          </div>
           
-          <Separator className="my-4" />
+          {/* Separator */}
+          <div className="my-3 mx-2 border-t border-[#30363d]" />
           
-          {settingsItems.map(renderNavItem)}
+          {/* Settings */}
+          <div className="space-y-0.5">
+            {settingsItems.map(renderNavItem)}
+          </div>
         </nav>
 
+        {/* Source Indicators */}
+        <SourceIndicators isCollapsed={isCollapsed} />
+
         {/* Collapse Toggle */}
-        <div className="p-2 border-t border-sidebar-border">
+        <div className="p-2 border-t border-[#30363d]">
           <Button
             variant="ghost"
             size="sm"
             onClick={onToggle}
             className={cn(
-              'w-full justify-center',
-              !isCollapsed && 'justify-start'
+              'w-full justify-center h-9 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-[#21262d]',
+              !isCollapsed && 'justify-start px-3'
             )}
           >
             {isCollapsed ? (

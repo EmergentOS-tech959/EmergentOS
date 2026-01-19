@@ -58,6 +58,20 @@ export async function POST() {
       });
     }
 
+    // Update sync status to indicate fetching
+    await supa
+      .from('sync_status')
+      .upsert(
+        {
+          user_id: userId,
+          status: 'fetching',
+          current_provider: 'gmail',
+          error_message: null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' }
+      );
+
     // Trigger the Inngest function directly
     await inngest.send({
       name: 'gmail/connection.established',
@@ -70,12 +84,36 @@ export async function POST() {
       },
     });
 
+    // CRITICAL: Update last_sync_at immediately for UI consistency
+    // The Inngest function will also update this when it completes,
+    // but we set it now so the frontend has a consistent time immediately
+    const syncTime = new Date().toISOString();
+    await supa
+      .from('connections')
+      .update({ last_sync_at: syncTime, status: 'connected' })
+      .eq('user_id', userId)
+      .eq('provider', 'gmail');
+
+    // Update sync status to complete
+    await supa
+      .from('sync_status')
+      .upsert(
+        {
+          user_id: userId,
+          status: 'complete',
+          current_provider: null,
+          error_message: null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' }
+      );
+
     return NextResponse.json({
       success: true,
       message: 'Sync triggered successfully',
       userId: userId,
       connectionId,
-      timestamp: new Date().toISOString(),
+      timestamp: syncTime,
     });
 
   } catch (error) {

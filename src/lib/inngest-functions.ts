@@ -5,6 +5,7 @@ import { scanContent } from './nightfall';
 import { upsertPiiVaultTokens } from './pii-vault';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { generateBriefingForUser, listBriefingUserIds } from './briefing-generator';
+import { runCalendarAnalysisForUser } from './calendar-analysis';
 
 // Initialize Nango client
 const nango = new Nango({ 
@@ -70,7 +71,13 @@ export const processGmailConnection = inngest.createFunction(
         const { error } = await supa
         .from('sync_status')
           .upsert(
-            { user_id: userId, status: 'fetching', updated_at: new Date().toISOString(), error_message: null },
+            {
+          user_id: userId,
+          status: 'fetching',
+              current_provider: 'gmail',
+          updated_at: new Date().toISOString(),
+              error_message: null,
+            },
             { onConflict: 'user_id' }
           );
         if (error) throw error;
@@ -124,7 +131,13 @@ export const processGmailConnection = inngest.createFunction(
         const { error } = await supa
         .from('sync_status')
           .upsert(
-            { user_id: userId, status: 'securing', updated_at: new Date().toISOString(), error_message: null },
+            {
+          user_id: userId,
+          status: 'securing',
+              current_provider: 'gmail',
+          updated_at: new Date().toISOString(),
+              error_message: null,
+            },
             { onConflict: 'user_id' }
           );
         if (error) throw error;
@@ -166,10 +179,25 @@ export const processGmailConnection = inngest.createFunction(
         const { error } = await supa
           .from('sync_status')
           .upsert(
-            { user_id: userId, status: 'complete', updated_at: new Date().toISOString(), error_message: null },
+            {
+              user_id: userId,
+              status: 'complete',
+              current_provider: null,
+              updated_at: new Date().toISOString(),
+              error_message: null,
+            },
             { onConflict: 'user_id' }
           );
         if (error) throw error;
+      });
+
+      await step.run('update-connection-last-sync-gmail', async () => {
+        // Best-effort: reflect successful sync for UI status
+        await supa
+          .from('connections')
+          .update({ last_sync_at: new Date().toISOString(), status: 'connected' })
+          .eq('user_id', userId)
+          .eq('provider', 'gmail');
       });
 
       return {
@@ -184,7 +212,13 @@ export const processGmailConnection = inngest.createFunction(
         const { error } = await supa
           .from('sync_status')
           .upsert(
-            { user_id: userId, status: 'error', error_message: message, updated_at: new Date().toISOString() },
+            {
+              user_id: userId,
+              status: 'error',
+              current_provider: 'gmail',
+              error_message: message,
+              updated_at: new Date().toISOString(),
+            },
             { onConflict: 'user_id' }
           );
         if (error) console.error('Failed to update sync_status error', error);
@@ -350,12 +384,76 @@ export const syncCalendarEvents = inngest.createFunction(
       if (error) throw error;
     });
 
+    await step.run('update-connection-last-sync-calendar', async () => {
+      await supa
+        .from('connections')
+        .update({ last_sync_at: new Date().toISOString(), status: 'connected' })
+        .eq('user_id', userId)
+        .eq('provider', 'calendar');
+    });
+
+    // Emit an event for downstream analysis pipeline (Time Sovereignty)
+    await step.run('emit-calendar-events-synced', async () => {
+      await inngest.send({
+        name: 'calendar/events.synced',
+        data: { userId, timestamp: new Date().toISOString() },
+      });
+    });
+
     return {
       success: true,
       userId,
       eventsProcessed: events.length,
       timestamp: new Date().toISOString(),
     };
+  }
+);
+
+/**
+ * Time Sovereignty: analyze calendar (event-triggered)
+ */
+export const analyzeCalendar = inngest.createFunction(
+  { id: 'analyze-calendar', name: 'Analyze Calendar', retries: 2 },
+  { event: 'calendar/events.synced' },
+  async ({ event, step }) => {
+    const { userId } = event.data as { userId: string };
+    const result = await step.run('run-calendar-analysis', async () => runCalendarAnalysisForUser({ userId }));
+    return { ...result, timestamp: new Date().toISOString() };
+  }
+);
+
+/**
+ * Time Sovereignty: cron fan-out every 30 minutes
+ */
+export const analyzeCalendarCron = inngest.createFunction(
+  { id: 'analyze-calendar-cron', name: 'Analyze Calendar (Cron)', retries: 1 },
+  { cron: '*/30 * * * *' },
+  async ({ step }) => {
+    const userIds = await step.run('list-calendar-users', async () => {
+      const { data, error } = await supa
+        .from('connections')
+        .select('user_id')
+        .eq('provider', 'calendar')
+        .eq('status', 'connected')
+        .limit(2000);
+      if (error) throw error;
+      return Array.from(new Set((data || []).map((r) => String((r as { user_id?: unknown }).user_id || '')))).filter(
+        Boolean
+      );
+    });
+
+    if (userIds.length === 0) return { success: true, queued: 0 };
+
+    await step.run('enqueue-calendar-analysis', async () => {
+      await inngest.send(
+        userIds.map((userId) => ({
+          name: 'calendar/events.synced',
+          data: { userId, timestamp: new Date().toISOString(), cron: true },
+        }))
+      );
+    });
+
+    return { success: true, queued: userIds.length };
   }
 );
 
@@ -462,6 +560,14 @@ export const syncDriveDocuments = inngest.createFunction(
       if (error) throw error;
     });
 
+    await step.run('update-connection-last-sync-drive', async () => {
+      await supa
+        .from('connections')
+        .update({ last_sync_at: new Date().toISOString(), status: 'connected' })
+        .eq('user_id', userId)
+        .eq('provider', 'drive');
+    });
+
     return { 
       success: true,
       userId,
@@ -507,4 +613,12 @@ export const generateDailyBriefingsCron = inngest.createFunction(
 );
 
 // Export all functions
-export const functions = [processGmailConnection, syncCalendarEvents, syncDriveDocuments, generateDailyBriefing, generateDailyBriefingsCron];
+export const functions = [
+  processGmailConnection,
+  syncCalendarEvents,
+  syncDriveDocuments,
+  generateDailyBriefing,
+  generateDailyBriefingsCron,
+  analyzeCalendar,
+  analyzeCalendarCron,
+];

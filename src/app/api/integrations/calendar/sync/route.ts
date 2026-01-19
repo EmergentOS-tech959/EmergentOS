@@ -7,6 +7,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { Nango } from '@nangohq/node';
 import { scanContent } from '@/lib/nightfall';
 import { upsertPiiVaultTokens } from '@/lib/pii-vault';
+import { runCalendarAnalysisForUser } from '@/lib/calendar-analysis';
 
 function getDlpConfigIssue(): string | null {
   if (!process.env.NIGHTFALL_API_KEY) return 'Missing NIGHTFALL_API_KEY on server (DLP gate required)';
@@ -27,8 +28,10 @@ function parseProxyData(data: unknown): unknown {
 }
 
 export async function POST() {
+  let authedUserId: string | null = null;
   try {
     const { userId } = await auth();
+    authedUserId = userId || null;
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -87,6 +90,20 @@ export async function POST() {
       });
     }
 
+    // Ensure the UI doesn't get stuck if Inngest doesn't execute: we drive status transitions here.
+    await supa
+      .from('sync_status')
+      .upsert(
+        {
+          user_id: userId,
+          status: 'fetching',
+          current_provider: 'calendar',
+          error_message: null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' }
+      );
+
     // Send event to Inngest (asynchronous pipeline)
     await inngest.send({
       name: 'calendar/connection.established',
@@ -101,6 +118,18 @@ export async function POST() {
     // Also perform a direct sync for immediate UI feedback
     const nangoSecretKey = process.env.NANGO_SECRET_KEY;
     if (!nangoSecretKey) {
+      await supa
+        .from('sync_status')
+        .upsert(
+          {
+            user_id: userId,
+            status: 'error',
+            current_provider: 'calendar',
+            error_message: 'Nango not configured on server',
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id' }
+        );
       return NextResponse.json({
         success: true,
         eventsSynced: 0,
@@ -129,6 +158,18 @@ export async function POST() {
       });
     } catch (nangoError) {
       console.error('Nango calendar sync failed', nangoError);
+      await supa
+        .from('sync_status')
+        .upsert(
+          {
+            user_id: userId,
+            status: 'error',
+            current_provider: 'calendar',
+            error_message: 'Calendar sync could not reach Nango',
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id' }
+        );
       return NextResponse.json({
         success: true,
         eventsSynced: 0,
@@ -233,12 +274,37 @@ export async function POST() {
     if (events.length > 0) {
       const dlpIssue = getDlpConfigIssue();
       if (dlpIssue) {
+        await supa
+          .from('sync_status')
+          .upsert(
+            {
+              user_id: userId,
+              status: 'error',
+              current_provider: 'calendar',
+              error_message: dlpIssue,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'user_id' }
+          );
         return NextResponse.json({
           success: true,
           eventsSynced: 0,
           warning: dlpIssue,
         });
       }
+
+      await supa
+        .from('sync_status')
+        .upsert(
+          {
+            user_id: userId,
+            status: 'securing',
+            current_provider: 'calendar',
+            error_message: null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id' }
+        );
 
       // Nightfall DLP gate before storage
       try {
@@ -253,6 +319,18 @@ export async function POST() {
       } catch (dlpError) {
         const details = dlpError instanceof Error ? dlpError.message : 'Unknown DLP error';
         console.error('Calendar DLP gate failed', dlpError);
+        await supa
+          .from('sync_status')
+          .upsert(
+            {
+              user_id: userId,
+              status: 'error',
+              current_provider: 'calendar',
+              error_message: `Calendar DLP gate failed: ${details}`,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'user_id' }
+          );
         return NextResponse.json({
           success: true,
           eventsSynced: 0,
@@ -267,8 +345,10 @@ export async function POST() {
         console.error('Calendar upsert error', upsertError);
       }
 
-      // Simple conflict detection on fetched set
+      // Note: Advanced conflict detection is handled by calendar-analysis.ts
+      // Here we just do a basic hard-overlap pass for immediate UI feedback
       const sorted = events
+        .filter((ev) => ev.status !== 'cancelled')
         .map((ev) => ({
           ...ev,
           start: new Date(ev.start_time).getTime(),
@@ -279,6 +359,10 @@ export async function POST() {
       const conflicts: Record<string, string[]> = {};
       for (let i = 0; i < sorted.length; i++) {
         for (let j = i + 1; j < sorted.length; j++) {
+          // Stop checking if eventB starts more than an hour after eventA ends
+          if (sorted[j].start > sorted[i].end + 60 * 60 * 1000) break;
+          
+          // Hard overlap: eventB starts before eventA ends
           if (sorted[j].start < sorted[i].end) {
             conflicts[sorted[i].event_id] = [
               ...(conflicts[sorted[i].event_id] || []),
@@ -288,13 +372,13 @@ export async function POST() {
               ...(conflicts[sorted[j].event_id] || []),
               sorted[i].event_id,
             ];
-          } else {
-            break;
           }
         }
       }
 
-      for (const [eventId, overlapIds] of Object.entries(conflicts)) {
+      // Update conflict flags
+      for (const ev of events) {
+        const overlapIds = conflicts[ev.event_id] || [];
         const { error } = await supa
           .from('calendar_events')
           .update({
@@ -302,11 +386,42 @@ export async function POST() {
             conflict_with: overlapIds,
           })
           .eq('user_id', userId)
-          .eq('event_id', eventId);
+          .eq('event_id', ev.event_id);
         if (error) {
           console.error('Conflict update error', error);
         }
       }
+    }
+
+    // Mark sync completion for UI (even if 0 events were returned).
+    await supa
+      .from('connections')
+      .update({ last_sync_at: new Date().toISOString(), status: 'connected' })
+      .eq('user_id', userId)
+      .eq('provider', 'calendar');
+
+    await supa
+      .from('sync_status')
+      .upsert(
+        {
+          user_id: userId,
+          status: 'complete',
+          current_provider: null,
+          error_message: null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' }
+      );
+
+    // Time Sovereignty Pipeline: analyze next 7 days (best-effort; never block sync success)
+    try {
+      await runCalendarAnalysisForUser({ userId });
+      await inngest.send({
+        name: 'calendar/events.synced',
+        data: { userId, timestamp: new Date().toISOString() },
+      });
+    } catch (analysisError) {
+      console.error('Calendar analysis failed (non-blocking)', analysisError);
     }
 
     return NextResponse.json({
@@ -317,6 +432,25 @@ export async function POST() {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('Calendar sync trigger failed', error);
+    if (authedUserId) {
+      try {
+        const supa = supabaseAdmin as unknown as SupabaseClient;
+        await supa
+          .from('sync_status')
+          .upsert(
+            {
+              user_id: authedUserId,
+              status: 'error',
+              current_provider: 'calendar',
+              error_message: message,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'user_id' }
+          );
+      } catch {
+        // best-effort
+      }
+    }
     return NextResponse.json({ error: 'Failed to trigger calendar sync', details: message }, { status: 500 });
   }
 }

@@ -1,36 +1,34 @@
 'use client';
 
 import { UserButton } from '@clerk/nextjs';
-import { Search, Menu, MessageSquare } from 'lucide-react';
+import { Search, Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 interface HeaderProps {
   onOpenCommandPalette?: () => void;
   onOpenMobileNav?: () => void;
-  onToggleOmniPanel?: () => void;
 }
 
 export function Header({ 
   onOpenCommandPalette, 
   onOpenMobileNav,
-  onToggleOmniPanel,
 }: HeaderProps) {
   return (
     <header
       className={cn(
-        'sticky top-0 z-30 h-14 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60',
+        'sticky top-0 z-30 h-14 border-b border-[#30363d] bg-[#0d1117]/95 backdrop-blur supports-[backdrop-filter]:bg-[#0d1117]/80',
         'flex items-center justify-between px-4 gap-4',
         'transition-all duration-300'
       )}
     >
       {/* Left Section */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3">
         {/* Mobile Menu Button */}
         <Button
           variant="ghost"
           size="icon"
-          className="md:hidden"
+          className="md:hidden h-9 w-9 text-gray-400 hover:text-white hover:bg-[#21262d]"
           onClick={onOpenMobileNav}
         >
           <Menu className="h-5 w-5" />
@@ -41,15 +39,17 @@ export function Header({
         <Button
           variant="outline"
           className={cn(
-            'hidden sm:flex items-center gap-2 text-muted-foreground',
-            'h-9 px-3 w-64 justify-start'
+            'hidden sm:flex items-center gap-2.5 text-gray-500',
+            'h-10 px-4 w-80 justify-start',
+            'bg-[#161b22] border-[#30363d] hover:border-[#484f58] hover:bg-[#21262d]',
+            'rounded-xl transition-all'
           )}
           onClick={onOpenCommandPalette}
         >
           <Search className="h-4 w-4" />
-          <span className="text-sm">Search...</span>
-          <kbd className="ml-auto pointer-events-none hidden h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium opacity-100 sm:flex">
-            <span className="text-xs">⌘</span>K
+          <span className="text-sm text-gray-500">Search...</span>
+          <kbd className="ml-auto flex h-5 items-center gap-1 rounded-md border border-[#30363d] bg-[#21262d] px-1.5 font-mono text-[10px] font-medium text-gray-500">
+            <span className="text-[9px]">⌘</span>K
           </kbd>
         </Button>
 
@@ -57,7 +57,7 @@ export function Header({
         <Button
           variant="ghost"
           size="icon"
-          className="sm:hidden"
+          className="sm:hidden h-9 w-9 text-gray-400 hover:text-white hover:bg-[#21262d]"
           onClick={onOpenCommandPalette}
         >
           <Search className="h-5 w-5" />
@@ -66,26 +66,13 @@ export function Header({
       </div>
 
       {/* Right Section */}
-      <div className="flex items-center gap-2">
-        {/* Omni-Panel Toggle */}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onToggleOmniPanel}
-          className="relative"
-        >
-          <MessageSquare className="h-5 w-5" />
-          <span className="sr-only">Open chat</span>
-          {/* Active indicator */}
-          <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-primary animate-pulse" />
-        </Button>
-
+      <div className="flex items-center gap-3">
         {/* User Button */}
         <UserButton
           afterSignOutUrl="/"
           appearance={{
             elements: {
-              avatarBox: 'h-8 w-8 ring-2 ring-border hover:ring-primary/50 transition-all',
+              avatarBox: 'h-9 w-9 ring-2 ring-[#30363d] hover:ring-teal-500/50 transition-all',
             },
           }}
         />

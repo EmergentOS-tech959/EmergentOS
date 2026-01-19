@@ -3,14 +3,22 @@
 import { useState } from 'react';
 import Nango from '@nangohq/frontend';
 import { Button } from '@/components/ui/button';
-import { Mail, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import { Mail, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 
 interface ConnectGmailProps {
+  onConnectionStart?: () => void;
   onConnectionSuccess?: () => void;
   onConnectionError?: (error: Error) => void;
+  label?: string;
+  showIcon?: boolean;
+  buttonVariant?: React.ComponentProps<typeof Button>['variant'];
+  buttonSize?: React.ComponentProps<typeof Button>['size'];
+  className?: string;
 }
 
-type ConnectionState = 'idle' | 'connecting' | 'success' | 'error';
+type ConnectionState = 'idle' | 'connecting';
 
 /**
  * ConnectGmail Component
@@ -24,15 +32,20 @@ type ConnectionState = 'idle' | 'connecting' | 'success' | 'error';
  * 5. Webhook triggers Inngest function
  */
 export function ConnectGmail({ 
+  onConnectionStart,
   onConnectionSuccess, 
-  onConnectionError 
+  onConnectionError,
+  label = 'Connect Gmail',
+  showIcon = true,
+  buttonVariant = 'default',
+  buttonSize = 'default',
+  className,
 }: ConnectGmailProps) {
   const [state, setState] = useState<ConnectionState>('idle');
-  const [errorMessage, setErrorMessage] = useState<string>('');
 
   const handleConnect = async () => {
+    onConnectionStart?.();
     setState('connecting');
-    setErrorMessage('');
 
     try {
       // Step 1: Get a connect session token from our backend
@@ -60,67 +73,41 @@ export function ConnectGmail({
 
       // Step 4: OAuth completed successfully
       // The webhook will be triggered automatically by Nango
-      setState('success');
       onConnectionSuccess?.();
+      toast.success('Gmail connected', {
+        description: 'Sync runs securely in the background. It usually takes a few seconds to a minute.',
+      });
+      setState('idle');
 
     } catch (error) {
       console.error('Gmail connection error:', error);
-      setState('error');
       
       const message = error instanceof Error 
         ? error.message 
         : 'Failed to connect Gmail';
-      setErrorMessage(message);
       onConnectionError?.(error instanceof Error ? error : new Error(message));
+      toast.error('Gmail connection failed', { description: message });
+      setState('idle');
     }
   };
-
-  // Render based on state
-  if (state === 'success') {
-    return (
-      <div className="flex items-center gap-2 text-green-500">
-        <CheckCircle className="h-5 w-5" />
-        <span className="font-medium">Gmail Connected!</span>
-        <span className="text-muted-foreground text-sm">Processing emails...</span>
-      </div>
-    );
-  }
-
-  if (state === 'error') {
-    return (
-      <div className="flex flex-col items-center gap-3">
-        <div className="flex items-center gap-2 text-red-500">
-          <AlertCircle className="h-5 w-5" />
-          <span className="font-medium">Connection Failed</span>
-        </div>
-        <p className="text-sm text-muted-foreground">{errorMessage}</p>
-        <Button
-          onClick={handleConnect}
-          variant="outline"
-          className="gap-2"
-        >
-          <Mail className="h-4 w-4" />
-          Try Again
-        </Button>
-      </div>
-    );
-  }
 
   return (
     <Button
       onClick={handleConnect}
       disabled={state === 'connecting'}
-      className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
+      variant={buttonVariant}
+      size={buttonSize}
+      className={cn('gap-2', className)}
     >
       {state === 'connecting' ? (
         <>
           <Loader2 className="h-4 w-4 animate-spin" />
-          Connecting...
+          Connecting…
         </>
       ) : (
         <>
-          <Mail className="h-4 w-4" />
-          Connect Gmail
+          {showIcon ? <Mail className="h-4 w-4" /> : null}
+          {label}
         </>
       )}
     </Button>

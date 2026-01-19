@@ -20,8 +20,9 @@ import {
   Calendar,
   Mail,
   FileText,
-  MessageSquare,
   RefreshCw,
+  Sparkles,
+  ArrowRight,
 } from 'lucide-react';
 
 interface CommandPaletteProps {
@@ -38,134 +39,176 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
     callback();
   }, [onClose]);
 
-  const navigationItems = [
-    {
-      icon: LayoutDashboard,
-      label: 'Dashboard',
-      shortcut: '⌘D',
-      action: () => router.push('/dashboard'),
-    },
-    {
-      icon: Inbox,
-      label: 'Unified Inbox',
-      shortcut: '⌘I',
-      action: () => router.push('/inbox'),
-    },
-    {
-      icon: FolderOpen,
-      label: 'Resources',
-      shortcut: '⌘R',
-      action: () => router.push('/resources'),
-    },
-    {
-      icon: Settings,
-      label: 'Settings',
-      shortcut: '⌘,',
-      action: () => router.push('/settings'),
-    },
-  ];
-
-  const actionItems = [
-    {
-      icon: RefreshCw,
-      label: 'Refresh Briefing',
-      description: 'Generate a new daily briefing',
-      action: () => {
-        // TODO: Implement briefing refresh
-        console.log('Refresh briefing');
-      },
-    },
-    {
-      icon: MessageSquare,
-      label: 'Ask AI Assistant',
-      description: 'Open chat with your data',
-      action: () => {
-        // TODO: Open Omni-Panel
-        console.log('Open chat');
-      },
-    },
-  ];
-
-  const searchCategories = [
-    { icon: Mail, label: 'Search Emails', prefix: 'email:' },
-    { icon: Calendar, label: 'Search Calendar', prefix: 'cal:' },
-    { icon: FileText, label: 'Search Documents', prefix: 'doc:' },
-  ];
-
   return (
     <CommandDialog open={isOpen} onOpenChange={onClose}>
-      <CommandInput
-        placeholder="Type a command or search..."
-        value={search}
-        onValueChange={setSearch}
-      />
-      <CommandList>
-        <CommandEmpty>
-          <div className="flex flex-col items-center gap-2 py-6">
-            <Search className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">No results found.</p>
-            <p className="text-xs text-muted-foreground">
-              Try searching for emails, events, or documents.
-            </p>
-          </div>
-        </CommandEmpty>
-
-        <CommandGroup heading="Navigation">
-          {navigationItems.map((item) => (
-            <CommandItem
-              key={item.label}
-              onSelect={() => handleSelect(item.action)}
-              className="flex items-center gap-2"
-            >
-              <item.icon className="h-4 w-4" />
-              <span>{item.label}</span>
-              {item.shortcut && (
-                <kbd className="ml-auto text-xs text-muted-foreground">
-                  {item.shortcut}
-                </kbd>
-              )}
-            </CommandItem>
-          ))}
-        </CommandGroup>
-
-        <CommandSeparator />
-
-        <CommandGroup heading="Actions">
-          {actionItems.map((item) => (
-            <CommandItem
-              key={item.label}
-              onSelect={() => handleSelect(item.action)}
-              className="flex items-center gap-2"
-            >
-              <item.icon className="h-4 w-4" />
-              <div className="flex flex-col">
-                <span>{item.label}</span>
-                <span className="text-xs text-muted-foreground">
-                  {item.description}
-                </span>
+      <div className="bg-[#0d1117] border-[#30363d]">
+        <CommandInput
+          placeholder="Type a command or search..."
+          value={search}
+          onValueChange={setSearch}
+          className="h-14 text-base border-b border-[#30363d] bg-transparent text-white placeholder:text-gray-500"
+        />
+        <CommandList className="max-h-[400px] p-3 overflow-y-auto">
+          <CommandEmpty>
+            <div className="flex flex-col items-center gap-3 py-8">
+              <div className="w-12 h-12 rounded-xl bg-[#21262d] flex items-center justify-center">
+                <Search className="h-5 w-5 text-gray-500" />
               </div>
-            </CommandItem>
-          ))}
-        </CommandGroup>
+              <div className="text-center">
+                <p className="text-sm text-gray-400">No results found</p>
+                <p className="text-xs text-gray-500 mt-1">Try a different search term</p>
+              </div>
+            </div>
+          </CommandEmpty>
 
-        <CommandSeparator />
+          {/* Navigation */}
+          <CommandGroup heading="Navigation">
+            <div className="grid grid-cols-2 gap-2">
+              <CommandItem 
+                onSelect={() => handleSelect(() => router.push('/dashboard'))} 
+                className="flex items-center gap-3 py-3 px-3 rounded-lg bg-[#161b22] border border-[#30363d] hover:border-teal-500/50 cursor-pointer"
+              >
+                <div className="w-9 h-9 rounded-lg bg-teal-500/10 flex items-center justify-center">
+                  <LayoutDashboard className="h-4 w-4 text-teal-400" />
+                </div>
+                <div className="flex-1">
+                  <span className="text-sm text-white">Dashboard</span>
+                  <p className="text-[10px] text-gray-500">Overview & briefing</p>
+                </div>
+                <ArrowRight className="h-3 w-3 text-gray-600" />
+              </CommandItem>
+              
+              <CommandItem 
+                onSelect={() => handleSelect(() => router.push('/inbox'))} 
+                className="flex items-center gap-3 py-3 px-3 rounded-lg bg-[#161b22] border border-[#30363d] hover:border-blue-500/50 cursor-pointer"
+              >
+                <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                  <Inbox className="h-4 w-4 text-blue-400" />
+                </div>
+                <div className="flex-1">
+                  <span className="text-sm text-white">Inbox</span>
+                  <p className="text-[10px] text-gray-500">Unified messages</p>
+                </div>
+                <ArrowRight className="h-3 w-3 text-gray-600" />
+              </CommandItem>
+              
+              <CommandItem 
+                onSelect={() => handleSelect(() => router.push('/resources'))} 
+                className="flex items-center gap-3 py-3 px-3 rounded-lg bg-[#161b22] border border-[#30363d] hover:border-green-500/50 cursor-pointer"
+              >
+                <div className="w-9 h-9 rounded-lg bg-green-500/10 flex items-center justify-center">
+                  <FolderOpen className="h-4 w-4 text-green-400" />
+                </div>
+                <div className="flex-1">
+                  <span className="text-sm text-white">Resources</span>
+                  <p className="text-[10px] text-gray-500">Files & documents</p>
+                </div>
+                <ArrowRight className="h-3 w-3 text-gray-600" />
+              </CommandItem>
+              
+              <CommandItem 
+                onSelect={() => handleSelect(() => router.push('/settings'))} 
+                className="flex items-center gap-3 py-3 px-3 rounded-lg bg-[#161b22] border border-[#30363d] hover:border-gray-500/50 cursor-pointer"
+              >
+                <div className="w-9 h-9 rounded-lg bg-gray-500/10 flex items-center justify-center">
+                  <Settings className="h-4 w-4 text-gray-400" />
+                </div>
+                <div className="flex-1">
+                  <span className="text-sm text-white">Settings</span>
+                  <p className="text-[10px] text-gray-500">Connections & prefs</p>
+                </div>
+                <ArrowRight className="h-3 w-3 text-gray-600" />
+              </CommandItem>
+            </div>
+          </CommandGroup>
 
-        <CommandGroup heading="Search In">
-          {searchCategories.map((item) => (
-            <CommandItem
-              key={item.label}
-              onSelect={() => setSearch(item.prefix)}
-              className="flex items-center gap-2"
-            >
-              <item.icon className="h-4 w-4" />
-              <span>{item.label}</span>
-              <span className="ml-auto text-xs text-muted-foreground font-mono">
-                {item.prefix}
-              </span>
-            </CommandItem>
-          ))}
-        </CommandGroup>
-      </CommandList>
+          <CommandSeparator className="my-3 bg-[#30363d]" />
+
+          {/* Quick Actions */}
+          <CommandGroup heading="Quick Actions">
+            <div className="grid grid-cols-2 gap-2">
+              <CommandItem 
+                onSelect={() => handleSelect(() => void fetch('/api/ai/briefing/generate', { method: 'POST' }))} 
+                className="flex items-center gap-3 py-3 px-3 rounded-lg bg-[#161b22] border border-[#30363d] hover:border-amber-500/50 cursor-pointer"
+              >
+                <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                  <RefreshCw className="h-4 w-4 text-amber-400" />
+                </div>
+                <div className="flex-1">
+                  <span className="text-sm text-white">Refresh Briefing</span>
+                  <p className="text-[10px] text-gray-500">Regenerate daily brief</p>
+                </div>
+              </CommandItem>
+              
+              <CommandItem 
+                onSelect={() => handleSelect(() => window.dispatchEvent(new CustomEvent('open-omni-panel')))} 
+                className="flex items-center gap-3 py-3 px-3 rounded-lg bg-[#161b22] border border-[#30363d] hover:border-amber-500/50 cursor-pointer"
+              >
+                <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                  <Sparkles className="h-4 w-4 text-amber-400" />
+                </div>
+                <div className="flex-1">
+                  <span className="text-sm text-white">Ask AI</span>
+                  <p className="text-[10px] text-gray-500">Chat with assistant</p>
+                </div>
+              </CommandItem>
+            </div>
+          </CommandGroup>
+
+          <CommandSeparator className="my-3 bg-[#30363d]" />
+
+          {/* Search Filters */}
+          <CommandGroup heading="Search In">
+            <div className="grid grid-cols-3 gap-2">
+              <CommandItem 
+                onSelect={() => setSearch('email:')} 
+                className="flex flex-col items-center gap-2 py-3 px-2 rounded-lg bg-[#161b22] border border-[#30363d] hover:border-red-500/50 cursor-pointer"
+              >
+                <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
+                  <Mail className="h-5 w-5 text-red-400" />
+                </div>
+                <span className="text-xs text-gray-300">Emails</span>
+              </CommandItem>
+              
+              <CommandItem 
+                onSelect={() => setSearch('cal:')} 
+                className="flex flex-col items-center gap-2 py-3 px-2 rounded-lg bg-[#161b22] border border-[#30363d] hover:border-blue-500/50 cursor-pointer"
+              >
+                <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
+                  <Calendar className="h-5 w-5 text-blue-400" />
+                </div>
+                <span className="text-xs text-gray-300">Calendar</span>
+              </CommandItem>
+              
+              <CommandItem 
+                onSelect={() => setSearch('doc:')} 
+                className="flex flex-col items-center gap-2 py-3 px-2 rounded-lg bg-[#161b22] border border-[#30363d] hover:border-green-500/50 cursor-pointer"
+              >
+                <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center">
+                  <FileText className="h-5 w-5 text-green-400" />
+                </div>
+                <span className="text-xs text-gray-300">Documents</span>
+              </CommandItem>
+            </div>
+          </CommandGroup>
+
+          {/* Keyboard shortcuts hint */}
+          <div className="mt-4 pt-3 border-t border-[#30363d] flex items-center justify-center gap-4 text-[10px] text-gray-500">
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 rounded bg-[#21262d] text-gray-400">↑↓</kbd>
+              Navigate
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 rounded bg-[#21262d] text-gray-400">↵</kbd>
+              Select
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 rounded bg-[#21262d] text-gray-400">Esc</kbd>
+              Close
+            </span>
+          </div>
+        </CommandList>
+      </div>
     </CommandDialog>
   );
 }

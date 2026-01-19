@@ -42,6 +42,13 @@ export async function POST() {
 
     await supa.from('connections').delete().eq('provider', 'drive').eq('connection_id', String(connectionId));
     await supa.from('drive_documents').delete().eq('user_id', userId);
+    // Also delete embeddings from this source
+    await supa.from('embeddings').delete().eq('user_id', userId).eq('source_type', 'drive');
+    
+    // CRITICAL: Delete today's briefing so stale Drive data isn't shown
+    // A new briefing will be regenerated without Drive data
+    const today = new Date().toISOString().split('T')[0];
+    await supa.from('briefings').delete().eq('user_id', userId).eq('date', today);
 
     return NextResponse.json({ success: true });
   } catch (error) {

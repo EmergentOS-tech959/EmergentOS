@@ -98,6 +98,34 @@ export interface Briefing {
 }
 
 /**
+ * Calendar insights / analysis output (Time Sovereignty)
+ */
+export interface CalendarInsight {
+  id: string;
+  user_id: string;
+  analysis_date: string;
+  window_start: string;
+  window_end: string;
+  conflicts: unknown[];
+  conflicts_count: number;
+  suggestions?: string;
+  generated_at: string;
+}
+
+/**
+ * Chat message persisted for Omni-Panel sessions
+ */
+export interface ChatMessage {
+  id: string;
+  user_id: string;
+  session_id: string; // UUID (stored as uuid in DB, represented as string in TS)
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  sources?: unknown[]; // JSONB; API narrows shape
+  created_at: string;
+}
+
+/**
  * User sync status record from Supabase
  */
 export interface SyncStatusRecord {
@@ -210,6 +238,16 @@ export interface Database {
         Row: Briefing;
         Insert: Omit<Briefing, 'id' | 'generated_at'>;
         Update: Partial<Omit<Briefing, 'id' | 'generated_at'>>;
+      };
+      calendar_insights: {
+        Row: CalendarInsight;
+        Insert: Omit<CalendarInsight, 'id' | 'generated_at'>;
+        Update: Partial<Omit<CalendarInsight, 'id' | 'generated_at'>>;
+      };
+      chat_messages: {
+        Row: ChatMessage;
+        Insert: Omit<ChatMessage, 'id' | 'created_at'>;
+        Update: Partial<Omit<ChatMessage, 'id' | 'created_at'>>;
       };
     };
     Views: Record<string, never>;
