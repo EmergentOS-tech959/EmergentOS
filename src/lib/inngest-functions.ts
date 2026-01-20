@@ -6,6 +6,14 @@ import { upsertPiiVaultTokens } from './pii-vault';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { generateBriefingForUser, listBriefingUserIds } from './briefing-generator';
 import { runCalendarAnalysisForUser } from './calendar-analysis';
+import {
+  generateEmbeddings,
+  buildEmailEmbeddingInputs,
+  buildCalendarEmbeddingInputs,
+  buildDriveEmbeddingInputs,
+  buildBriefingEmbeddingInputs,
+  type SourceType,
+} from './embeddings';
 
 // Initialize Nango client
 const nango = new Nango({ 
@@ -198,6 +206,16 @@ export const processGmailConnection = inngest.createFunction(
           .update({ last_sync_at: new Date().toISOString(), status: 'connected' })
           .eq('user_id', userId)
           .eq('provider', 'gmail');
+      });
+
+      // Trigger background embedding generation
+      await step.run('trigger-embedding-generation-gmail', async () => {
+        if (process.env.OPENAI_API_KEY && emails.length > 0) {
+          await inngest.send({
+            name: 'embeddings/generate.requested',
+            data: { userId, sourceType: 'email', timestamp: new Date().toISOString() },
+          });
+        }
       });
 
       return {
@@ -400,6 +418,16 @@ export const syncCalendarEvents = inngest.createFunction(
       });
     });
 
+    // Trigger background embedding generation
+    await step.run('trigger-embedding-generation-calendar', async () => {
+      if (process.env.OPENAI_API_KEY && events.length > 0) {
+        await inngest.send({
+          name: 'embeddings/generate.requested',
+          data: { userId, sourceType: 'calendar', timestamp: new Date().toISOString() },
+        });
+      }
+    });
+
     return {
       success: true,
       userId,
@@ -568,6 +596,16 @@ export const syncDriveDocuments = inngest.createFunction(
         .eq('provider', 'drive');
     });
 
+    // Trigger background embedding generation
+    await step.run('trigger-embedding-generation-drive', async () => {
+      if (process.env.OPENAI_API_KEY && files.length > 0) {
+        await inngest.send({
+          name: 'embeddings/generate.requested',
+          data: { userId, sourceType: 'drive', timestamp: new Date().toISOString() },
+        });
+      }
+    });
+
     return { 
       success: true,
       userId,
@@ -586,6 +624,17 @@ export const generateDailyBriefing = inngest.createFunction(
   async ({ event, step }) => {
     const { userId, date } = event.data as { userId: string; date?: string };
     await step.run('generate-briefing', async () => generateBriefingForUser({ userId, date }));
+    
+    // Trigger embedding generation for the new briefing
+    await step.run('trigger-embedding-generation-briefing', async () => {
+      if (process.env.OPENAI_API_KEY) {
+        await inngest.send({
+          name: 'embeddings/generate.requested',
+          data: { userId, sourceType: 'briefing', timestamp: new Date().toISOString() },
+        });
+      }
+    });
+
     return { success: true, userId, date: date || new Date().toISOString().slice(0, 10) };
   }
 );
@@ -612,6 +661,130 @@ export const generateDailyBriefingsCron = inngest.createFunction(
   }
 );
 
+/**
+ * Background embedding generation (triggered after sync)
+ */
+export const generateEmbeddingsForUser = inngest.createFunction(
+  { id: 'generate-embeddings', name: 'Generate Embeddings', retries: 2 },
+  { event: 'embeddings/generate.requested' },
+  async ({ event, step }) => {
+    const { userId, sourceType, sourceIds } = event.data as {
+      userId: string;
+      sourceType?: SourceType;
+      sourceIds?: string[];
+    };
+
+    // Check if OpenAI is configured
+    if (!process.env.OPENAI_API_KEY) {
+      console.log('OpenAI API key not configured, skipping embedding generation');
+      return { success: true, skipped: true, reason: 'OPENAI_API_KEY not configured' };
+    }
+
+    const results: Record<string, { embedded: number; skipped: number; errors: string[] }> = {};
+
+    // Generate embeddings based on source type or all types
+    const typesToProcess: SourceType[] = sourceType 
+      ? [sourceType] 
+      : ['email', 'calendar', 'drive', 'briefing'];
+
+    for (const type of typesToProcess) {
+      const result = await step.run(`embed-${type}`, async () => {
+        let inputs;
+
+        switch (type) {
+          case 'email': {
+            const query = supa.from('emails').select('id, subject, sender, snippet, body_preview, received_at').eq('user_id', userId);
+            const { data } = sourceIds 
+              ? await query.in('id', sourceIds)
+              : await query.order('received_at', { ascending: false }).limit(100);
+            inputs = buildEmailEmbeddingInputs(data || []);
+            break;
+          }
+          case 'calendar': {
+            const query = supa.from('calendar_events').select('id, title, description, location, start_time, end_time, attendees').eq('user_id', userId);
+            const { data } = sourceIds
+              ? await query.in('id', sourceIds)
+              : await query.order('start_time', { ascending: false }).limit(100);
+            inputs = buildCalendarEmbeddingInputs(data || []);
+            break;
+          }
+          case 'drive': {
+            const query = supa.from('drive_documents').select('id, name, mime_type, folder_path, modified_at').eq('user_id', userId);
+            const { data } = sourceIds
+              ? await query.in('id', sourceIds)
+              : await query.order('modified_at', { ascending: false }).limit(100);
+            inputs = buildDriveEmbeddingInputs(data || []);
+            break;
+          }
+          case 'briefing': {
+            const query = supa.from('briefings').select('id, briefing_date, content, summary').eq('user_id', userId);
+            const { data } = sourceIds
+              ? await query.in('id', sourceIds)
+              : await query.order('briefing_date', { ascending: false }).limit(14);
+            inputs = buildBriefingEmbeddingInputs(data || []);
+            break;
+          }
+        }
+
+        if (!inputs || inputs.length === 0) {
+          return { embedded: 0, skipped: 0, errors: [] as string[] };
+        }
+
+        return generateEmbeddings(userId, inputs);
+      });
+
+      results[type] = result as { embedded: number; skipped: number; errors: string[] };
+    }
+
+    return {
+      success: true,
+      userId,
+      results,
+      timestamp: new Date().toISOString(),
+    };
+  }
+);
+
+/**
+ * Scheduled embedding refresh (every 10 minutes, generates for new items only)
+ */
+export const generateEmbeddingsCron = inngest.createFunction(
+  { id: 'generate-embeddings-cron', name: 'Generate Embeddings (Cron)', retries: 1 },
+  { cron: '*/10 * * * *' },
+  async ({ step }) => {
+    if (!process.env.OPENAI_API_KEY) {
+      return { success: true, skipped: true, reason: 'OPENAI_API_KEY not configured' };
+    }
+
+    // Get all users with connected sources
+    const userIds = await step.run('list-users', async () => {
+      const { data, error } = await supa
+        .from('connections')
+        .select('user_id')
+        .eq('status', 'connected')
+        .limit(2000);
+      if (error) throw error;
+      return Array.from(new Set((data || []).map((r) => String((r as { user_id?: unknown }).user_id || '')))).filter(Boolean);
+    });
+
+    if (userIds.length === 0) {
+      return { success: true, queued: 0 };
+    }
+
+    // Queue embedding jobs for each user
+    await step.run('enqueue-embeddings', async () => {
+      await inngest.send(
+        userIds.map((userId) => ({
+          name: 'embeddings/generate.requested',
+          data: { userId, timestamp: new Date().toISOString() },
+        }))
+      );
+    });
+
+    return { success: true, queued: userIds.length };
+  }
+);
+
 // Export all functions
 export const functions = [
   processGmailConnection,
@@ -621,4 +794,6 @@ export const functions = [
   generateDailyBriefingsCron,
   analyzeCalendar,
   analyzeCalendarCron,
+  generateEmbeddingsForUser,
+  generateEmbeddingsCron,
 ];

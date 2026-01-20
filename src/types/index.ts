@@ -126,6 +126,20 @@ export interface ChatMessage {
 }
 
 /**
+ * Vector embedding for semantic search (RAG)
+ */
+export interface Embedding {
+  id: string;
+  user_id: string;
+  source_type: 'email' | 'calendar' | 'drive' | 'briefing';
+  source_id: string;
+  content: string;
+  metadata?: Record<string, unknown>;
+  embedding?: number[]; // 1536 dimensions (OpenAI text-embedding-3-small)
+  created_at: string;
+}
+
+/**
  * User sync status record from Supabase
  */
 export interface SyncStatusRecord {
@@ -249,9 +263,32 @@ export interface Database {
         Insert: Omit<ChatMessage, 'id' | 'created_at'>;
         Update: Partial<Omit<ChatMessage, 'id' | 'created_at'>>;
       };
+      embeddings: {
+        Row: Embedding;
+        Insert: Omit<Embedding, 'id' | 'created_at'>;
+        Update: Partial<Omit<Embedding, 'id' | 'created_at'>>;
+      };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      match_embeddings: {
+        Args: {
+          query_embedding: string;
+          match_threshold?: number;
+          match_count?: number;
+          filter_user_id?: string;
+          filter_source_types?: string[];
+        };
+        Returns: Array<{
+          id: string;
+          source_type: string;
+          source_id: string;
+          content: string;
+          metadata: Record<string, unknown>;
+          similarity: number;
+        }>;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };
