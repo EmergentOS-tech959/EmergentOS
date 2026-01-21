@@ -86,7 +86,7 @@ export function GoalProgressWidget() {
             <span className="font-medium">Add New Goal</span>
           </div>
         </button>
-      </div>
+        </div>
 
       {/* Footer */}
       <div className="pt-4 mt-auto border-t border-border flex items-center gap-2">

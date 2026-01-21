@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -56,17 +56,17 @@ export function ScheduleWidget() {
   const calendarStatus = calendarProvider.status === 'syncing' ? 'connected' : calendarProvider.status;
 
   const fetchEvents = useCallback(async () => {
-    if (!user?.id) return;
-    try {
-      setIsLoading(true);
+      if (!user?.id) return;
+      try {
+        setIsLoading(true);
       const res = await fetch('/api/integrations/calendar/events', { cache: 'no-store' });
       const body = await res.json().catch(() => ({}));
       if (res.ok) setEvents(body?.events || []);
     } catch (e) {
       console.error('Error fetching events:', e);
-    } finally {
-      setIsLoading(false);
-    }
+      } finally {
+        setIsLoading(false);
+      }
   }, [user?.id]);
 
   const fetchInsight = useCallback(async () => {
@@ -87,18 +87,37 @@ export function ScheduleWidget() {
     void fetchInsight();
   }, [fetchEvents, fetchInsight]);
 
-  // Listen for sync completions
+  // CRITICAL: Refetch when calendar sync completes (lastSyncAt changes)
+  // This is more reliable than listening to custom events
+  const lastSyncAtRef = useRef<string | null>(null);
+  useEffect(() => {
+    // Only refetch if lastSyncAt actually changed (not on initial mount)
+    if (calendarProvider.lastSyncAt && calendarProvider.lastSyncAt !== lastSyncAtRef.current) {
+      const wasNull = lastSyncAtRef.current === null;
+      lastSyncAtRef.current = calendarProvider.lastSyncAt;
+      
+      // Skip initial mount, only refetch on subsequent changes
+      if (!wasNull) {
+        console.log('[ScheduleWidget] Calendar lastSyncAt changed, refetching...');
+        void fetchEvents();
+        void fetchInsight();
+      }
+    }
+  }, [calendarProvider.lastSyncAt, fetchEvents, fetchInsight]);
+
+  // Also listen for custom event as backup
   useEffect(() => {
     const handler = (e: Event) => {
-      const ce = e as CustomEvent<{ providers?: string[]; phase?: string }>;
+      const ce = e as CustomEvent<{ providers?: string[]; phase?: string; syncedProviders?: string[] }>;
       if (ce?.detail?.phase !== 'complete') return;
-      // Refetch if calendar was synced (wait for analysis to complete)
-      if (ce?.detail?.providers?.includes('calendar') || !ce?.detail?.providers) {
-        // Calendar analysis runs during sync, wait for it to complete
-        setTimeout(() => {
-          void fetchEvents();
-          void fetchInsight();
-        }, 2000);
+      // Check both providers and syncedProviders arrays
+      const hasCalendar = 
+        ce?.detail?.providers?.includes('calendar') || 
+        ce?.detail?.syncedProviders?.includes('calendar');
+      if (hasCalendar) {
+        console.log('[ScheduleWidget] eos:connections-updated event received for calendar');
+        void fetchEvents();
+        void fetchInsight();
       }
     };
     window.addEventListener('eos:connections-updated', handler as EventListener);
@@ -143,11 +162,31 @@ export function ScheduleWidget() {
       body: JSON.stringify(event),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed');
+    // Auto-refresh after create
+    await fetchEvents();
+    await fetchInsight();
+  };
+
+  const handleEventUpdate = async (id: string, event: Partial<CalendarEvent>) => {
+    const res = await fetch(`/api/integrations/calendar/events/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(event),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(result?.error || 'Failed');
+    // Auto-refresh after update
+    await fetchEvents();
+    // Also refresh insights - time changes may affect conflicts
+    await fetchInsight();
   };
 
   const handleEventDelete = async (id: string) => {
     const res = await fetch(`/api/integrations/calendar/events/${id}`, { method: 'DELETE' });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed');
+    // Auto-refresh after delete
+    await fetchEvents();
+    await fetchInsight();
   };
 
   if (isLoading) {
@@ -178,7 +217,7 @@ export function ScheduleWidget() {
           <div className="widget-header">
             <div className="widget-icon bg-gradient-to-br from-sky-500/20 to-blue-500/10 ring-1 ring-sky-500/20">
               <Calendar className="h-5 w-5 text-sky-400" />
-            </div>
+        </div>
             <div>
               <h3 className="widget-title">Today&apos;s Schedule</h3>
               <p className="widget-subtitle">
@@ -186,7 +225,7 @@ export function ScheduleWidget() {
                   ? `${todayEvents.length} event${todayEvents.length !== 1 ? 's' : ''}`
                   : 'Not connected'}
               </p>
-            </div>
+      </div>
           </div>
           
           {actualConflictCount > 0 && (
@@ -210,10 +249,10 @@ export function ScheduleWidget() {
               <Sparkles className="h-4 w-4 text-ai-copper shrink-0" />
               <span className="text-xs font-semibold text-ai-copper flex-1">Strategic Insights Available</span>
               <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-ai-copper transition-colors" />
-            </div>
+                </div>
           </button>
-        )}
-
+              )}
+              
         {/* Events List */}
         <div className="flex-1 overflow-y-auto -mx-1 px-1 min-h-0 eos-scrollbar-thin">
           {calendarStatus === 'disconnected' ? (
@@ -243,7 +282,7 @@ export function ScheduleWidget() {
               </div>
               <p className="text-sm font-medium text-foreground mb-1">No Events Today</p>
               <p className="text-xs text-muted-foreground">Your schedule is clear</p>
-            </div>
+                </div>
           ) : (
             <div className="space-y-2">
               {todayEvents.slice(0, 4).map((event) => {
@@ -286,12 +325,12 @@ export function ScheduleWidget() {
                             </span>
                           )}
                         </div>
-                      </div>
+                  </div>
                       {event.has_conflict && <AlertTriangle className="h-4 w-4 text-status-amber shrink-0" />}
                       {isCurrent && !event.has_conflict && (
                         <span className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse shrink-0 mt-1" />
-                      )}
-                    </div>
+                )}
+              </div>
                   </button>
                 );
               })}
@@ -323,15 +362,16 @@ export function ScheduleWidget() {
               Open Calendar
               <ExternalLink className="h-3 w-3" />
             </Button>
-          )}
-        </div>
-      </Card>
+        )}
+      </div>
+    </Card>
 
       <CalendarModal
         isOpen={showCalendarModal}
         onClose={() => setShowCalendarModal(false)}
         events={events}
         onEventCreate={handleEventCreate}
+        onEventUpdate={handleEventUpdate}
         onEventDelete={handleEventDelete}
         isConnected={calendarStatus === 'connected'}
         lastSyncDisplay={displayStrings.calendar}

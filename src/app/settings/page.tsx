@@ -17,10 +17,8 @@ import {
   Shield,
   AlertTriangle,
 } from 'lucide-react';
-import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -52,56 +50,43 @@ function ConnectionCard({
   action,
 }: ConnectionCardProps) {
   return (
-    <Card className={cn(
-      'p-5 transition-all duration-200',
-      status === 'connected' && 'border-status-green/20',
-      status === 'error' && 'border-destructive/20'
+    <div className={cn(
+      'flex items-center justify-between gap-4 p-4 rounded-lg border bg-secondary/20 hover:bg-secondary/30 transition-colors',
+      status === 'connected' ? 'border-border/50' : 'border-border/30'
     )}>
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex items-start gap-4">
-          <div className={cn('h-12 w-12 rounded-xl flex items-center justify-center ring-1 shrink-0', iconBg)}>
-            {icon}
-          </div>
-          <div className="min-w-0">
-            <h4 className="font-semibold text-foreground">{name}</h4>
-            <p className="text-sm text-muted-foreground mt-0.5">{description}</p>
-            {status === 'connected' && lastSync && (
-              <div className="flex items-center gap-2 mt-2.5 text-xs text-muted-foreground">
-                <Clock className="h-3.5 w-3.5" />
-                <span>Last sync: {lastSync}</span>
-              </div>
-            )}
-          </div>
+      <div className="flex items-center gap-3 flex-1 min-w-0">
+        <div className={cn('h-10 w-10 rounded-lg flex items-center justify-center shrink-0', iconBg)}>
+          {icon}
         </div>
-        <div className="flex items-center gap-3 shrink-0">
-          {status === 'connected' && (
-            <div className="flex items-center gap-1.5 text-xs text-status-green bg-status-green/10 px-2.5 py-1.5 rounded-lg font-medium border border-status-green/20">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              <span>Connected</span>
+        <div className="min-w-0 flex-1">
+          <h4 className="font-medium text-sm text-foreground">{name}</h4>
+          <p className="text-xs text-muted-foreground mt-0.5 truncate">{description}</p>
+          {status === 'connected' && lastSync && (
+            <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-muted-foreground/70">
+              <Clock className="h-3 w-3" />
+              <span>Last sync: {lastSync}</span>
             </div>
           )}
-          {status === 'connecting' && (
-            <div className="flex items-center gap-1.5 text-xs text-status-amber bg-status-amber/10 px-2.5 py-1.5 rounded-lg font-medium border border-status-amber/20">
-              <Clock className="h-3.5 w-3.5 animate-spin" />
-              <span>Connecting</span>
-            </div>
-          )}
-          {status === 'disconnected' && (
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-secondary/50 px-2.5 py-1.5 rounded-lg font-medium border border-border">
-              <XCircle className="h-3.5 w-3.5" />
-              <span>Not connected</span>
-            </div>
-          )}
-          {status === 'error' && (
-            <div className="flex items-center gap-1.5 text-xs text-destructive bg-destructive/10 px-2.5 py-1.5 rounded-lg font-medium border border-destructive/20">
-              <AlertTriangle className="h-3.5 w-3.5" />
-              <span>Error</span>
-            </div>
-          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-4 shrink-0">
+        <span className={cn(
+          'text-[11px] font-medium flex items-center gap-1 w-24 justify-end',
+          status === 'connected' && 'text-emerald-500',
+          status === 'connecting' && 'text-amber-500',
+          status === 'disconnected' && 'text-muted-foreground',
+          status === 'error' && 'text-red-500'
+        )}>
+          {status === 'connected' && <><CheckCircle2 className="h-3 w-3" />Connected</>}
+          {status === 'connecting' && <><Clock className="h-3 w-3 animate-spin" />Connecting...</>}
+          {status === 'disconnected' && <><XCircle className="h-3 w-3" />Not connected</>}
+          {status === 'error' && <><AlertTriangle className="h-3 w-3" />Error</>}
+        </span>
+        <div className="w-[130px] flex justify-end">
           {action}
         </div>
       </div>
-    </Card>
+    </div>
   );
 }
 
@@ -340,202 +325,240 @@ export default function SettingsPage() {
   }, [refreshConnections, onProviderDisconnected]);
 
   return (
-    <div className="space-y-8 max-w-4xl">
+    <div className="max-w-3xl mx-auto">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Settings</h1>
-        <p className="text-muted-foreground mt-1">
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold text-foreground">Settings</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
           Manage your account, connections, and preferences
         </p>
       </div>
 
-      <Tabs defaultValue="account" className="space-y-6">
-        <TabsList className="bg-secondary/50 border border-border p-1 rounded-xl">
-          <TabsTrigger value="account" className="gap-2 rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm">
+      <Tabs defaultValue="connections" className="space-y-6">
+        <TabsList className="w-full justify-start bg-transparent border-b border-border rounded-none p-0 h-auto gap-0">
+          <TabsTrigger 
+            value="account" 
+            className="gap-1.5 px-4 py-2.5 text-sm font-medium rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-muted-foreground data-[state=active]:text-foreground hover:text-foreground transition-colors"
+          >
             <User className="h-4 w-4" />
             Account
           </TabsTrigger>
-          <TabsTrigger value="connections" className="gap-2 rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm">
+          <TabsTrigger 
+            value="connections" 
+            className="gap-1.5 px-4 py-2.5 text-sm font-medium rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-muted-foreground data-[state=active]:text-foreground hover:text-foreground transition-colors"
+          >
             <Link2 className="h-4 w-4" />
             Connections
           </TabsTrigger>
-          <TabsTrigger value="preferences" className="gap-2 rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm">
+          <TabsTrigger 
+            value="preferences" 
+            className="gap-1.5 px-4 py-2.5 text-sm font-medium rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-muted-foreground data-[state=active]:text-foreground hover:text-foreground transition-colors"
+          >
             <Bell className="h-4 w-4" />
             Preferences
           </TabsTrigger>
-          <TabsTrigger value="data" className="gap-2 rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm">
+          <TabsTrigger 
+            value="data" 
+            className="gap-1.5 px-4 py-2.5 text-sm font-medium rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-muted-foreground data-[state=active]:text-foreground hover:text-foreground transition-colors"
+          >
             <Database className="h-4 w-4" />
             Data
           </TabsTrigger>
         </TabsList>
 
         {/* Account Tab */}
-        <TabsContent value="account" className="space-y-6 animate-fade-in">
-          <Card className="p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-5">Profile</h3>
-            <div className="flex items-center gap-5">
-              <Avatar className="h-20 w-20 ring-2 ring-border">
+        <TabsContent value="account" className="space-y-5 pt-6">
+          <div className="space-y-4">
+            <h3 className="text-sm font-medium text-foreground">Profile</h3>
+            <div className="p-4 rounded-lg border border-border/30 bg-secondary/20">
+            <div className="flex items-center gap-4">
+                <Avatar className="h-14 w-14">
                 <AvatarImage src={user?.imageUrl} />
-                <AvatarFallback className="text-lg font-semibold bg-primary/10 text-primary">
+                  <AvatarFallback className="text-sm font-medium bg-primary/10 text-primary">
                   {user?.firstName?.[0]}{user?.lastName?.[0]}
                 </AvatarFallback>
               </Avatar>
-              <div>
-                <h4 className="font-semibold text-foreground text-lg">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-medium text-sm text-foreground">
                   {user?.fullName || 'User'}
                 </h4>
-                <p className="text-sm text-muted-foreground mt-0.5">
+                    <span className="text-[10px] text-emerald-500 font-medium flex items-center gap-0.5">
+                      <Shield className="h-3 w-3" />
+                      Verified
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
                   {user?.primaryEmailAddress?.emailAddress}
                 </p>
-                <div className="flex items-center gap-2 mt-3">
-                  <div className="flex items-center gap-1.5 text-xs text-status-green bg-status-green/10 px-2.5 py-1.5 rounded-lg font-medium border border-status-green/20">
-                    <Shield className="h-3.5 w-3.5" />
-                    <span>Verified</span>
-                  </div>
                 </div>
               </div>
             </div>
-            <Separator className="my-6" />
-            <p className="text-sm text-muted-foreground">
+            <p className="text-[11px] text-muted-foreground/70">
               Account managed by Clerk. Click your avatar in the header to update profile settings.
             </p>
-          </Card>
+          </div>
         </TabsContent>
 
         {/* Connections Tab */}
-        <TabsContent value="connections" className="space-y-4 animate-fade-in">
-          <ConnectionCard
-            name="Gmail"
-            description="Access your email for AI insights and summaries"
-            icon={<Mail className="h-6 w-6 text-rose-400" />}
-            iconBg="bg-rose-500/15 ring-rose-500/20"
-            status={pending.gmail ? 'connecting' : connectionStatus.gmail}
-            action={
-              connectionStatus.gmail === 'connected' ? (
-                flashConnected.gmail ? (
-                  <div className="text-xs text-status-green font-semibold bg-status-green/10 px-3 py-2 rounded-lg border border-status-green/20">Connected!</div>
-                ) : (
-                  <Button variant="outline" size="sm" onClick={disconnectGmail} className="font-medium">
-                    Disconnect
-                  </Button>
-                )
-              ) : (
-                <ConnectGmail
-                  onConnectionStart={() => markConnecting('gmail')}
-                  onConnectionSuccess={() => void handleProviderConnected('gmail')}
-                  onConnectionError={() => setPending((p) => ({ ...p, gmail: false }))}
-                />
-              )
-            }
-          />
-          <ConnectionCard
-            name="Google Calendar"
-            description="Sync your calendar events and detect conflicts"
-            icon={<Calendar className="h-6 w-6 text-sky-400" />}
-            iconBg="bg-sky-500/15 ring-sky-500/20"
-            status={pending.calendar ? 'connecting' : connectionStatus.calendar}
-            action={
-              connectionStatus.calendar === 'connected' ? (
-                flashConnected.calendar ? (
-                  <div className="text-xs text-status-green font-semibold bg-status-green/10 px-3 py-2 rounded-lg border border-status-green/20">Connected!</div>
-                ) : (
-                  <Button variant="outline" size="sm" onClick={disconnectCalendar} className="font-medium">
-                    Disconnect
-                  </Button>
-                )
-              ) : (
-                <ConnectCalendar
-                  onConnectionStart={() => markConnecting('calendar')}
-                  onConnectionSuccess={() => void handleProviderConnected('calendar')}
-                  onConnectionError={() => setPending((p) => ({ ...p, calendar: false }))}
-                />
-              )
-            }
-          />
-          <ConnectionCard
-            name="Google Drive"
-            description="Access your documents for context and analysis"
-            icon={<FileText className="h-6 w-6 text-emerald-400" />}
-            iconBg="bg-emerald-500/15 ring-emerald-500/20"
-            status={pending.drive ? 'connecting' : connectionStatus.drive}
-            action={
-              connectionStatus.drive === 'connected' ? (
-                flashConnected.drive ? (
-                  <div className="text-xs text-status-green font-semibold bg-status-green/10 px-3 py-2 rounded-lg border border-status-green/20">Connected!</div>
-                ) : (
-                  <Button variant="outline" size="sm" onClick={disconnectDrive} className="font-medium">
-                    Disconnect
-                  </Button>
-                )
-              ) : (
-                <ConnectDrive
-                  onConnectionStart={() => markConnecting('drive')}
-                  onConnectionSuccess={() => void handleProviderConnected('drive')}
-                  onConnectionError={() => setPending((p) => ({ ...p, drive: false }))}
-                />
-              )
-            }
-          />
+        <TabsContent value="connections" className="space-y-5 pt-6">
+          <div className="space-y-3">
+            <h3 className="text-sm font-medium text-foreground">Google Workspace</h3>
+            <div className="space-y-2">
+              <ConnectionCard
+                name="Gmail"
+                description="Access your email for AI insights and summaries"
+                icon={<Mail className="h-5 w-5 text-rose-400" />}
+                iconBg="bg-rose-500/10"
+                status={pending.gmail ? 'connecting' : connectionStatus.gmail}
+                action={
+                  connectionStatus.gmail === 'connected' ? (
+                    flashConnected.gmail ? (
+                      <span className="text-xs text-emerald-500 font-semibold">Connected!</span>
+                    ) : (
+                      <Button variant="outline" size="sm" onClick={disconnectGmail} className="h-8 w-full text-xs">
+                        Disconnect
+                      </Button>
+                    )
+                  ) : (
+                    <ConnectGmail
+                      onConnectionStart={() => markConnecting('gmail')}
+                      onConnectionSuccess={() => void handleProviderConnected('gmail')}
+                      onConnectionError={() => setPending((p) => ({ ...p, gmail: false }))}
+                      buttonVariant="default"
+                      buttonSize="sm"
+                      showIcon={false}
+                      label="Connect"
+                      className="h-8 w-full text-xs bg-teal-500 hover:bg-teal-600 text-white"
+                    />
+                  )
+                }
+              />
+              <ConnectionCard
+                name="Google Calendar"
+                description="Sync your calendar events and detect conflicts"
+                icon={<Calendar className="h-5 w-5 text-sky-400" />}
+                iconBg="bg-sky-500/10"
+                status={pending.calendar ? 'connecting' : connectionStatus.calendar}
+                action={
+                  connectionStatus.calendar === 'connected' ? (
+                    flashConnected.calendar ? (
+                      <span className="text-xs text-emerald-500 font-semibold">Connected!</span>
+                    ) : (
+                      <Button variant="outline" size="sm" onClick={disconnectCalendar} className="h-8 w-full text-xs">
+                        Disconnect
+                      </Button>
+                    )
+                  ) : (
+                    <ConnectCalendar
+                      onConnectionStart={() => markConnecting('calendar')}
+                      onConnectionSuccess={() => void handleProviderConnected('calendar')}
+                      onConnectionError={() => setPending((p) => ({ ...p, calendar: false }))}
+                      buttonVariant="default"
+                      buttonSize="sm"
+                      showIcon={false}
+                      label="Connect"
+                      className="h-8 w-full text-xs bg-teal-500 hover:bg-teal-600 text-white"
+                    />
+                  )
+                }
+              />
+              <ConnectionCard
+                name="Google Drive"
+                description="Access your documents for context and analysis"
+                icon={<FileText className="h-5 w-5 text-emerald-400" />}
+                iconBg="bg-emerald-500/10"
+                status={pending.drive ? 'connecting' : connectionStatus.drive}
+                action={
+                  connectionStatus.drive === 'connected' ? (
+                    flashConnected.drive ? (
+                      <span className="text-xs text-emerald-500 font-semibold">Connected!</span>
+                    ) : (
+                      <Button variant="outline" size="sm" onClick={disconnectDrive} className="h-8 w-full text-xs">
+                        Disconnect
+                      </Button>
+                    )
+                  ) : (
+                    <ConnectDrive
+                      onConnectionStart={() => markConnecting('drive')}
+                      onConnectionSuccess={() => void handleProviderConnected('drive')}
+                      onConnectionError={() => setPending((p) => ({ ...p, drive: false }))}
+                      buttonVariant="default"
+                      buttonSize="sm"
+                      showIcon={false}
+                      label="Connect"
+                      className="h-8 w-full text-xs bg-teal-500 hover:bg-teal-600 text-white"
+                    />
+                  )
+                }
+              />
+            </div>
+          </div>
         </TabsContent>
 
         {/* Preferences Tab */}
-        <TabsContent value="preferences" className="space-y-4 animate-fade-in">
-          <Card className="p-6 space-y-6">
-            <h3 className="text-lg font-semibold text-foreground">Notifications</h3>
-            
-            <div className="flex items-center justify-between p-4 rounded-xl bg-secondary/30 hover:bg-secondary/50 transition-colors">
+        <TabsContent value="preferences" className="space-y-5 pt-6">
+          <div className="space-y-3">
+            <h3 className="text-sm font-medium text-foreground">Notifications</h3>
+            <div className="rounded-lg border border-border/30 divide-y divide-border/30">
+              <div className="flex items-center justify-between p-4 hover:bg-secondary/20 transition-colors">
               <div>
-                <Label htmlFor="daily-briefing" className="text-foreground font-medium">Daily Briefing</Label>
-                <p className="text-sm text-muted-foreground mt-0.5">
+                  <Label htmlFor="daily-briefing" className="text-sm font-medium text-foreground cursor-pointer">Daily Briefing</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">
                   Receive your AI briefing every morning
                 </p>
               </div>
               <Switch id="daily-briefing" defaultChecked />
             </div>
             
-            <Separator />
-            
-            <div className="flex items-center justify-between p-4 rounded-xl bg-secondary/30 hover:bg-secondary/50 transition-colors">
+              <div className="flex items-center justify-between p-4 hover:bg-secondary/20 transition-colors">
               <div>
-                <Label htmlFor="conflict-alerts" className="text-foreground font-medium">Calendar Conflict Alerts</Label>
-                <p className="text-sm text-muted-foreground mt-0.5">
+                  <Label htmlFor="conflict-alerts" className="text-sm font-medium text-foreground cursor-pointer">Calendar Conflict Alerts</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">
                   Get notified about scheduling conflicts
                 </p>
               </div>
               <Switch id="conflict-alerts" defaultChecked />
             </div>
             
-            <Separator />
-            
-            <div className="flex items-center justify-between p-4 rounded-xl bg-secondary/30 hover:bg-secondary/50 transition-colors">
+              <div className="flex items-center justify-between p-4 hover:bg-secondary/20 transition-colors">
               <div>
-                <Label htmlFor="email-summary" className="text-foreground font-medium">Email Summary</Label>
-                <p className="text-sm text-muted-foreground mt-0.5">
+                  <Label htmlFor="email-summary" className="text-sm font-medium text-foreground cursor-pointer">Email Summary</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">
                   Weekly digest of important emails
                 </p>
               </div>
               <Switch id="email-summary" />
             </div>
-          </Card>
+            </div>
+          </div>
         </TabsContent>
 
         {/* Data Tab */}
-        <TabsContent value="data" className="space-y-4 animate-fade-in">
-          <Card className="p-6 space-y-4">
-            <h3 className="text-lg font-semibold text-foreground">Export Data</h3>
-            <p className="text-sm text-muted-foreground">
+        <TabsContent value="data" className="space-y-5 pt-6">
+          <div className="space-y-3">
+            <h3 className="text-sm font-medium text-foreground">Export</h3>
+            <div className="p-4 rounded-lg border border-border/30 bg-secondary/20">
+              <p className="text-xs text-muted-foreground mb-3">
               Download all your data including emails, calendar events, and AI-generated content.
             </p>
-            <Button variant="outline" className="font-medium">Export My Data</Button>
-          </Card>
+              <Button variant="secondary" size="sm" className="h-8 text-xs">
+                Export My Data
+              </Button>
+            </div>
+          </div>
           
-          <Card className="p-6 space-y-4 border-destructive/30 bg-destructive/5">
-            <h3 className="text-lg font-semibold text-destructive">Danger Zone</h3>
-            <p className="text-sm text-muted-foreground">
+          <div className="space-y-3">
+            <h3 className="text-sm font-medium text-red-500">Danger Zone</h3>
+            <div className="p-4 rounded-lg border border-red-500/20 bg-red-500/5">
+              <p className="text-xs text-muted-foreground mb-3">
               Permanently delete all your data. This action cannot be undone.
             </p>
-            <Button variant="destructive" className="font-medium">Purge All Data</Button>
-          </Card>
+              <Button variant="destructive" size="sm" className="h-8 text-xs">
+                Purge All Data
+              </Button>
+            </div>
+          </div>
         </TabsContent>
       </Tabs>
     </div>

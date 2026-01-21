@@ -33,7 +33,7 @@ export function HelpOverlay({ isOpen, onClose }: HelpOverlayProps) {
         <DialogHeader className="pb-4">
           <DialogTitle className="flex items-center gap-3 text-foreground">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary/20 to-teal-600/10 flex items-center justify-center ring-1 ring-primary/20">
-              <Keyboard className="h-5 w-5 text-primary" />
+            <Keyboard className="h-5 w-5 text-primary" />
             </div>
             Keyboard Shortcuts
           </DialogTitle>

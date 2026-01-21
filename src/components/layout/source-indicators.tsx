@@ -169,13 +169,13 @@ export function SourceIndicators({ isCollapsed }: SourceIndicatorsProps) {
                 <div className="flex flex-col gap-1 min-w-[100px]">
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-foreground text-sm">{label}</span>
-                    <span className={cn(
+                  <span className={cn(
                       'text-[9px] font-medium px-1.5 py-0.5 rounded-full',
                       isConnected && 'bg-emerald-500/15 text-emerald-400',
                       isSyncing && 'bg-sky-500/15 text-sky-400',
                       isError && 'bg-red-500/15 text-red-400',
                       !isConnected && !isError && !isSyncing && 'bg-muted text-muted-foreground',
-                    )}>
+                  )}>
                       {isSyncing ? 'Syncing' : 
                        isConnected ? 'Active' : 
                        isError ? 'Error' : 'Offline'}
@@ -184,7 +184,7 @@ export function SourceIndicators({ isCollapsed }: SourceIndicatorsProps) {
                   {isConnected && displayStrings[key] && displayStrings[key] !== 'Never synced' && (
                     <span className="text-[10px] text-muted-foreground">
                       Last sync: {displayStrings[key]}
-                    </span>
+                  </span>
                   )}
                   {!isConnected && !isError && (
                     <span className="text-[10px] text-muted-foreground">

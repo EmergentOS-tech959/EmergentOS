@@ -235,22 +235,10 @@ export function buildSystemContext(ctx: UserContext): string {
 
   lines.push(``);
   
-  // Add warnings for disconnected sources
+  // Only mention disconnected sources briefly (don't emphasize)
   if (ctx.disconnectedSources.length > 0) {
-    lines.push(`### ⚠️ Limitations`);
-    for (const source of ctx.disconnectedSources) {
-      switch (source) {
-        case 'gmail':
-          lines.push(`- Gmail is not connected. Cannot answer questions about emails.`);
-          break;
-        case 'calendar':
-          lines.push(`- Calendar is not connected. Cannot answer questions about schedule or meetings.`);
-          break;
-        case 'drive':
-          lines.push(`- Drive is not connected. Cannot answer questions about documents.`);
-          break;
-      }
-    }
+    lines.push(`### Note`);
+    lines.push(`- Not connected: ${ctx.disconnectedSources.join(', ')} (user can connect these in Settings if needed)`);
     lines.push(``);
   }
 
@@ -272,16 +260,21 @@ export function buildCompletePrompt(args: {
     .join('\n');
 
   return [
-    `You are EmergentOS, a secure executive assistant for C-level executives.`,
+    `You are EmergentOS, a helpful and proactive executive assistant for busy professionals.`,
     ``,
-    `## Critical Guidelines`,
-    `1. All user data is tokenized (e.g., [PERSON_001]) for security. Do NOT guess or reveal original values.`,
-    `2. Use ONLY the provided context to answer questions. If information is not available, say so clearly.`,
-    `3. Be aware of the current date/time when answering time-related questions.`,
-    `4. If a data source is not connected, inform the user they need to connect it first.`,
-    `5. Be concise, professional, and actionable.`,
-    `6. When citing sources, use format [source:id] like [email:abc123] or [calendar:xyz789].`,
-    `7. Provide strategic insights, not just raw data summaries.`,
+    `## Your Role`,
+    `- Answer questions directly and helpfully using the provided context`,
+    `- Be proactive: search and summarize relevant information without excessive clarifying questions`,
+    `- When the user asks about emails, meetings, or documents, use the context data to answer immediately`,
+    `- Be concise, professional, and actionable`,
+    ``,
+    `## Important Guidelines`,
+    `1. USE the "Relevant Context" section below - it contains actual data from the user's Gmail, Calendar, and Drive`,
+    `2. Display email subjects, sender names, meeting titles, and document names as they appear in the context`,
+    `3. If some data contains security tokens like [PERSON_001] or [EMAIL_001], display them as-is (the system will decode them)`,
+    `4. Only mention that a source is "not connected" if it's explicitly stated in System Context AND the user specifically asks about that source`,
+    `5. When citing sources, reference them naturally (e.g., "In your email from John about the Q1 budget...")`,
+    `6. If the context doesn't contain relevant information, say "I couldn't find any matching emails/events/documents" and suggest refining the search`,
     ``,
     args.systemContext,
     args.searchContext,
@@ -291,6 +284,6 @@ export function buildCompletePrompt(args: {
     `## User Question`,
     args.userMessage,
     ``,
-    `## Your Response`,
+    `## Your Response (be helpful and answer directly using the context above)`,
   ].join('\n');
 }

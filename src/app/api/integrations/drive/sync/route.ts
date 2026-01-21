@@ -2,81 +2,58 @@ import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { inngest } from '@/lib/inngest';
 import { supabaseAdmin } from '@/lib/supabase-server';
-import { Nango } from '@nangohq/node';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { scanContent } from '@/lib/nightfall';
-import { upsertPiiVaultTokens } from '@/lib/pii-vault';
-import { DriveConfig } from '@/lib/config/data-scope';
 
-type GoogleDriveFile = {
-  id: string;
-  name: string;
-  mimeType?: string;
-  modifiedTime?: string;
-  webViewLink?: string;
-  parents?: string[];
-  md5Checksum?: string;
-};
+// Maximum time to wait for Inngest to complete (120 seconds for large syncs)
+const MAX_POLL_TIME_MS = 120_000;
+const POLL_INTERVAL_MS = 500;
 
-function parseProxyData(data: unknown): unknown {
-  if (typeof data !== 'string') return data;
-  try {
-    return JSON.parse(data) as unknown;
-  } catch {
-    return data;
+/**
+ * Poll sync_status until complete or timeout
+ */
+async function waitForSyncCompletion(
+  supa: SupabaseClient,
+  userId: string,
+  startTime: number
+): Promise<{ completed: boolean; error?: string }> {
+  const deadline = startTime + MAX_POLL_TIME_MS;
+
+  while (Date.now() < deadline) {
+    const { data: status } = await supa
+      .from('sync_status')
+      .select('status, error_message, current_provider')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    // Completed
+    if (status?.status === 'complete') {
+      return { completed: true };
+    }
+
+    // Error
+    if (status?.status === 'error') {
+      return { completed: false, error: status.error_message || 'Sync failed' };
+    }
+
+    // Still in progress - wait
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }
-}
 
-function getDlpConfigIssue(): string | null {
-  if (!process.env.NIGHTFALL_API_KEY) return 'Missing NIGHTFALL_API_KEY on server (DLP gate required)';
-  const keyB64 = process.env.PII_VAULT_KEY_BASE64;
-  if (!keyB64) return 'Missing PII_VAULT_KEY_BASE64 on server (PII vault encryption key required)';
-  const key = Buffer.from(keyB64, 'base64');
-  if (key.length !== 32) return 'PII_VAULT_KEY_BASE64 must decode to 32 bytes (AES-256 key)';
-  return null;
+  // Timeout
+  return { completed: false, error: 'Sync timeout - still processing in background' };
 }
 
 /**
- * Fetch ALL Drive files with pagination (no limit)
+ * POST /api/integrations/drive/sync
+ * Triggers Drive sync via Inngest and waits for completion
+ * 
+ * Benefits of Inngest:
+ * - Automatic retries (3x) with exponential backoff
+ * - Long-running execution (up to 2 hours)
+ * - Full observability in Inngest dashboard
+ * - Reliable DLP and embedding processing
  */
-async function fetchAllDriveFiles(
-  nango: Nango,
-  connectionId: string,
-  modifiedSince: string,
-  pageSize: number = 100
-): Promise<GoogleDriveFile[]> {
-  const allFiles: GoogleDriveFile[] = [];
-  let pageToken: string | undefined = undefined;
-
-  do {
-    const response = await nango.proxy({
-      connectionId,
-      providerConfigKey: 'google-drive',
-      method: 'GET',
-      endpoint: '/drive/v3/files',
-      params: {
-        pageSize: String(pageSize),
-        q: `modifiedTime > '${modifiedSince}' and trashed = false`,
-        fields: 'files(id,name,mimeType,modifiedTime,webViewLink,parents,md5Checksum),nextPageToken',
-        ...(pageToken && { pageToken }),
-      },
-    });
-
-    const parsed = parseProxyData(response.data) as { files?: unknown[]; nextPageToken?: string } | undefined;
-    const files: GoogleDriveFile[] =
-      typeof parsed === 'object' && parsed && Array.isArray(parsed.files)
-        ? (parsed.files as GoogleDriveFile[])
-        : [];
-
-    allFiles.push(...files);
-    pageToken = parsed?.nextPageToken;
-
-  } while (pageToken);
-
-  return allFiles;
-}
-
-export async function POST() {
+export async function POST(req: Request) {
   let authedUserId: string | null = null;
   try {
     const { userId } = await auth();
@@ -84,6 +61,16 @@ export async function POST() {
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const supa = supabaseAdmin as unknown as SupabaseClient;
+
+    // Parse trigger from request body (default to 'manual')
+    let trigger: 'connect' | 'manual' | 'auto' = 'manual';
+    try {
+      const body = await req.json();
+      if (body.trigger === 'auto') trigger = 'auto';
+      if (body.trigger === 'connect') trigger = 'connect';
+    } catch {
+      // No body or invalid JSON - use default
+    }
 
     // Find connectionId by Clerk userId
     const { data: direct } = await supa
@@ -95,8 +82,8 @@ export async function POST() {
 
     const directData = direct as { connection_id?: string; last_sync_at?: string } | null;
     const directId = directData?.connection_id;
-    const lastSyncAt = directData?.last_sync_at ? new Date(directData.last_sync_at) : null;
-    
+    const initialLastSyncAt = directData?.last_sync_at;
+
     const { data: meta } = directId
       ? { data: null }
       : await supa
@@ -114,179 +101,86 @@ export async function POST() {
         success: true,
         documentsSynced: 0,
         warning: 'Drive not connected.',
+        dataChanged: false,
       });
     }
 
-    await supa
-      .from('sync_status')
-      .upsert(
-        {
-          user_id: userId,
-          status: 'fetching',
-          current_provider: 'drive',
-          error_message: null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'user_id' }
-      );
+    // Track initial document count to detect changes
+    const { count: initialDocCount } = await supa
+      .from('drive_documents')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId);
 
-    // Fire async pipeline
+    console.log(`[Drive Sync API] Triggering Inngest sync for user ${userId}, trigger: ${trigger}`);
+    const startTime = Date.now();
+
+    // Send event to Inngest - it handles everything:
+    // - Fetch files with pagination
+    // - DLP scanning
+    // - Database persistence
+    // - Embedding generation
     await inngest.send({
-      name: 'drive/connection.established',
+      name: 'drive/sync.requested',
       data: {
         userId,
         connectionId,
-        providerConfigKey: 'google-drive',
-        trigger: 'manual',
+        trigger,
         timestamp: new Date().toISOString(),
       },
     });
 
-    const nangoSecretKey = process.env.NANGO_SECRET_KEY;
-    if (!nangoSecretKey) {
-      await supa
-        .from('sync_status')
-        .upsert(
-          {
-            user_id: userId,
-            status: 'error',
-            current_provider: 'drive',
-            error_message: 'Nango not configured',
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'user_id' }
-        );
-      return NextResponse.json({
-        success: true,
-        documentsSynced: 0,
-        warning: 'Nango not configured.',
-      });
-    }
+    // Wait for Inngest to complete
+    const pollResult = await waitForSyncCompletion(supa, userId, startTime);
 
-    const nango = new Nango({ secretKey: nangoSecretKey });
-    
-    // ═══════════════════════════════════════════════════════════════════════
-    // DRIVE SYNC - Determine INITIAL vs DELTA sync based on last_sync_at
-    // ═══════════════════════════════════════════════════════════════════════
-    
-    const isInitialSync = !lastSyncAt;
-    let since: string;
-    let pageSize: number;
-    
-    if (isInitialSync) {
-      // INITIAL SYNC: 14 days back
-      const timeRange = DriveConfig.initialSync.getTimeRange();
-      since = timeRange.from.toISOString();
-      pageSize = DriveConfig.initialSync.pageSize;
-      console.log(`[Drive Sync API] INITIAL SYNC - Since: ${since}`);
-    } else {
-      // DELTA SYNC: Since last sync
-      const timeRange = DriveConfig.deltaSync.getTimeRange(lastSyncAt);
-      since = timeRange.from.toISOString();
-      pageSize = DriveConfig.deltaSync.pageSize;
-      console.log(`[Drive Sync API] DELTA SYNC - Since: ${since}`);
-    }
-
-    let files: GoogleDriveFile[];
-    try {
-      // Fetch ALL files with pagination (no limit)
-      files = await fetchAllDriveFiles(nango, String(connectionId), since, pageSize);
-    } catch (nangoError) {
-      console.error('Nango drive sync failed', nangoError);
-      await supa
-        .from('sync_status')
-        .upsert(
-          {
-            user_id: userId,
-            status: 'error',
-            current_provider: 'drive',
-            error_message: 'Drive sync failed',
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'user_id' }
-        );
-      return NextResponse.json({
-        success: true,
-        documentsSynced: 0,
-        warning: 'Drive sync failed.',
-      });
-    }
-
-    console.log(`[Drive Sync API] Total files fetched: ${files.length}`);
-
-    const rows = files.map((f) => ({
-      user_id: userId,
-      document_id: f.id,
-      name: f.name,
-      mime_type: f.mimeType || 'application/octet-stream',
-      folder_path: f.parents?.[0] || null,
-      modified_at: f.modifiedTime || null,
-      web_view_link: f.webViewLink || null,
-      content_hash: f.md5Checksum || null,
-      is_context_folder: false,
-    }));
-
-    if (rows.length > 0) {
-      await supa
-        .from('sync_status')
-        .upsert(
-          {
-            user_id: userId,
-            status: 'securing',
-            current_provider: 'drive',
-            error_message: null,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'user_id' }
-        );
-
-      // DLP scan files - graceful fallback on failure (continue without redaction)
-      const dlpIssue = getDlpConfigIssue();
-      if (dlpIssue) {
-        console.warn(`[Drive Sync] DLP not configured: ${dlpIssue}, continuing without redaction`);
-      } else {
-        try {
-          for (const r of rows) {
-            const scanned = await scanContent(r.name);
-            await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
-            r.name = scanned.redacted;
-          }
-        } catch (dlpError) {
-          // DLP failed (rate limit, etc.) - continue WITHOUT redaction
-          // Better to sync unredacted data than fail entirely
-          console.warn('[Drive Sync] DLP scan failed, continuing without redaction:', dlpError);
-        }
+    if (!pollResult.completed) {
+      // Sync still in progress or errored
+      if (pollResult.error?.includes('timeout')) {
+        console.log(`[Drive Sync API] Sync still running after ${MAX_POLL_TIME_MS}ms`);
+        return NextResponse.json({
+          success: true,
+          queued: true,
+          documentsSynced: 0,
+          dataChanged: false,
+          warning: 'Sync is running in background. Check back shortly.',
+        });
       }
 
-      const { error } = await supa.from('drive_documents').upsert(rows, { onConflict: 'user_id,document_id' });
-      if (error) console.error('Drive upsert error', error);
+      console.error(`[Drive Sync API] Sync error:`, pollResult.error);
+      return NextResponse.json({
+        success: false,
+        error: pollResult.error,
+        documentsSynced: 0,
+        dataChanged: false,
+      }, { status: 500 });
     }
 
-    await supa
+    // Sync completed - check results
+    const { data: updatedConn } = await supa
       .from('connections')
-      .update({ last_sync_at: new Date().toISOString(), status: 'connected' })
+      .select('last_sync_at')
       .eq('user_id', userId)
-      .eq('provider', 'drive');
+      .eq('provider', 'drive')
+      .maybeSingle();
 
-    await supa
-      .from('sync_status')
-      .upsert(
-        {
-          user_id: userId,
-          status: 'complete',
-          current_provider: null,
-          error_message: null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'user_id' }
-      );
+    const { count: finalDocCount } = await supa
+      .from('drive_documents')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId);
 
-    return NextResponse.json({ 
-      success: true, 
-      documentsSynced: rows.length,
-      syncType: isInitialSync ? 'initial' : 'delta',
-      dataChanged: rows.length > 0,
+    const documentsSynced = Math.max(0, (finalDocCount || 0) - (initialDocCount || 0));
+    const lastSyncChanged = updatedConn?.last_sync_at !== initialLastSyncAt;
+    const dataChanged = documentsSynced > 0 || lastSyncChanged;
+
+    const syncDurationMs = Date.now() - startTime;
+    console.log(`[Drive Sync API] Completed in ${syncDurationMs}ms, synced: ${documentsSynced}, dataChanged: ${dataChanged}`);
+
+    return NextResponse.json({
+      success: true,
+      documentsSynced,
+      syncType: initialLastSyncAt ? 'delta' : 'initial',
+      dataChanged,
     });
+
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('Drive sync trigger failed', error);

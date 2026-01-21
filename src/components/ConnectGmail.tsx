@@ -88,7 +88,7 @@ export function ConnectGmail({
       onConnectionError?.(error instanceof Error ? error : new Error(message));
       toast.error('Gmail connection failed', { description: message });
       setState('idle');
-    }
+  }
   };
 
   return (

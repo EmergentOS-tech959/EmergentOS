@@ -365,25 +365,25 @@ export default function ResourcesPage() {
                           <div className="w-10 h-10 rounded-lg bg-secondary/50 flex items-center justify-center shrink-0">
                             <IconComponent className="h-5 w-5 text-muted-foreground" />
                           </div>
-                          <div className="min-w-0">
+                        <div className="min-w-0">
                             <div className="text-sm font-medium text-foreground truncate">{d.name}</div>
                             <div className="text-xs text-muted-foreground truncate mt-0.5">
                               {d.mime_type.split('.').pop()?.replace('application/', '')}
                             </div>
-                          </div>
                         </div>
-                        {d.web_view_link && (
-                          <a
-                            className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 font-medium transition-colors shrink-0"
-                            href={d.web_view_link}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Open
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </a>
-                        )}
                       </div>
+                      {d.web_view_link && (
+                        <a
+                            className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 font-medium transition-colors shrink-0"
+                          href={d.web_view_link}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open
+                            <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                    </div>
                     );
                   })}
                 </div>

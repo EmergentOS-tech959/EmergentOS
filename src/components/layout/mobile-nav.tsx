@@ -207,7 +207,7 @@ export function MobileNav({ isOpen, onClose, onOpenCommandPalette }: MobileNavPr
         <nav className="p-3 overflow-y-auto eos-scrollbar-thin">
           {/* Main navigation */}
           <div className="space-y-0.5">
-            {navItems.map(renderNavItem)}
+          {navItems.map(renderNavItem)}
           </div>
           
           {/* Separator */}
@@ -220,10 +220,10 @@ export function MobileNav({ isOpen, onClose, onOpenCommandPalette }: MobileNavPr
             <div className="flex items-center gap-2 px-4 py-2">
               <Lock className="h-3 w-3 text-muted-foreground/40" />
               <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
-                Coming Soon
-              </span>
-            </div>
-            {lockedItems.map(renderNavItem)}
+              Coming Soon
+            </span>
+          </div>
+          {lockedItems.map(renderNavItem)}
           </div>
           
           {/* Separator */}

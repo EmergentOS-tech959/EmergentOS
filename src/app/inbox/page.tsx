@@ -110,7 +110,7 @@ export default function InboxPage() {
             Recently modified documents surface automatically with AI-generated summaries and related emails.
           </p>
         </Card>
-      </div>
+        </div>
     </div>
   );
 }

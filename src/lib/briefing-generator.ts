@@ -123,7 +123,7 @@ export async function generateBriefingForUser(args: { userId: string; date?: str
     gmailConnected
       ? supa
           .from('emails')
-          .select('message_id,sender,subject,received_at')
+          .select('message_id,sender,subject,snippet,received_at')
           .eq('user_id', userId)
           .gte('received_at', sinceEmails)
           .order('received_at', { ascending: false })
@@ -158,7 +158,10 @@ export async function generateBriefingForUser(args: { userId: string; date?: str
   } else if ((emails || []).length === 0) {
     emailLines = '(Inbox is quiet - no new emails in the last 24 hours)';
   } else {
-    emailLines = (emails || []).map((e) => `- From: ${e.sender} | Subject: ${e.subject} | Time: ${e.received_at}`).join('\n');
+    emailLines = (emails || []).map((e) => {
+      const snippet = e.snippet ? `\n  Preview: ${e.snippet.slice(0, 200)}${e.snippet.length > 200 ? '...' : ''}` : '';
+      return `- From: ${e.sender} | Subject: ${e.subject} | Time: ${e.received_at}${snippet}`;
+    }).join('\n');
   }
 
   let eventLines: string;

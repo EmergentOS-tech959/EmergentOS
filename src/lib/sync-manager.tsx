@@ -52,6 +52,15 @@ interface SyncApiResponse {
     totalIssues?: number;
     error?: string;
   };
+  // Embedding generation status
+  embeddingStatus?: {
+    triggered: boolean;
+    method?: string;
+    embedded?: number;
+    skipped?: number;
+    error?: string;
+    reason?: string;
+  };
 }
 
 // CRITICAL: Separate display strings for different contexts
@@ -334,7 +343,12 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       const syncPromises = connectedProviders.map(async (provider) => {
         try {
           const endpoint = PROVIDER_SYNC_ENDPOINTS[provider];
-          const res = await fetch(endpoint, { method: 'POST' });
+          // Pass trigger type to API route so Inngest knows if this is auto/manual/connect
+          const res = await fetch(endpoint, { 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ trigger: request.trigger }),
+          });
           const body: SyncApiResponse = await res.json().catch(() => ({}));
           const dataChanged = body.dataChanged ?? (
             (body.eventsSynced ?? 0) > 0 ||
@@ -345,6 +359,24 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
           // Log individual provider sync result
           const count = body.eventsSynced ?? body.documentsSynced ?? body.emailsProcessed ?? 0;
           console.log(`[SyncManager] ${provider} sync: ${body.syncType || 'sync'}, ${count} items, dataChanged: ${dataChanged}`);
+          
+          // Log embedding status if present
+          if (body.embeddingStatus) {
+            const es = body.embeddingStatus;
+            if (es.triggered) {
+              if (es.method === 'inngest') {
+                console.log(`[SyncManager] ${provider} embeddings: sent to Inngest (background processing)`);
+              } else if (es.method === 'direct') {
+                if (es.error) {
+                  console.error(`[SyncManager] ${provider} embeddings FAILED: ${es.error}`);
+                } else {
+                  console.log(`[SyncManager] ${provider} embeddings: embedded=${es.embedded}, skipped=${es.skipped}`);
+                }
+              }
+            } else {
+              console.warn(`[SyncManager] ${provider} embeddings SKIPPED: ${es.reason}`);
+            }
+          }
           
           return { 
             provider, 

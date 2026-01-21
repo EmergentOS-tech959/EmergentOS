@@ -48,6 +48,7 @@ interface ParsedEmail {
 interface ParsedCalendarEvent {
   eventId: string;
   title: string;
+  description?: string;
   startTime: string;
   endTime: string;
   location?: string;
@@ -58,6 +59,7 @@ interface ParsedCalendarEvent {
 type GoogleCalendarApiEvent = {
   id: string;
   summary?: string;
+  description?: string;
   start?: { dateTime?: string; date?: string };
   end?: { dateTime?: string; date?: string };
   location?: string;
@@ -242,7 +244,8 @@ async function fetchAllDriveFiles(
 
 export const processGmailConnection = inngest.createFunction(
   { id: 'process-gmail-connection', name: 'Process Gmail Connection', retries: 3 },
-  { event: 'gmail/connection.established' },
+  // Listen to BOTH initial connection AND manual/auto sync requests
+  [{ event: 'gmail/connection.established' }, { event: 'gmail/sync.requested' }],
   async ({ event, step }) => {
     const { userId, connectionId, trigger = 'connect' } = event.data as { 
       userId: string; 
@@ -252,15 +255,15 @@ export const processGmailConnection = inngest.createFunction(
     const nangoConnectionId = connectionId || userId;
 
     try {
-      await step.run('update-status-fetching', async () => {
+    await step.run('update-status-fetching', async () => {
         const { error } = await supa
-          .from('sync_status')
+        .from('sync_status')
           .upsert(
             {
-              user_id: userId,
-              status: 'fetching',
+          user_id: userId,
+          status: 'fetching',
               current_provider: 'gmail',
-              updated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
               error_message: null,
             },
             { onConflict: 'user_id' }
@@ -304,7 +307,7 @@ export const processGmailConnection = inngest.createFunction(
         const messages = await fetchAllGmailMessages(nangoConnectionId, query, pageSize);
         
         console.log(`[Gmail Sync] Total messages fetched: ${messages.length}`);
-        
+
         if (messages.length === 0) {
           return {
             emails: [],
@@ -470,15 +473,46 @@ export const processGmailConnection = inngest.createFunction(
           .eq('provider', 'gmail');
       });
 
-      // Trigger background embedding generation
-      await step.run('trigger-embedding-generation-gmail', async () => {
-        if (process.env.OPENAI_API_KEY && emails.length > 0) {
-          await inngest.send({
-            name: 'embeddings/generate.requested',
-            data: { userId, sourceType: 'email', timestamp: new Date().toISOString() },
-          });
+      // Generate embeddings DIRECTLY (more reliable than separate event)
+      const embeddingResult = await step.run('generate-embeddings-gmail', async () => {
+        if (!process.env.OPENAI_API_KEY) {
+          console.log('[Gmail Inngest] OPENAI_API_KEY not configured, skipping embeddings');
+          return { skipped: true, reason: 'OPENAI_API_KEY not configured' };
         }
+        
+        if (emails.length === 0) {
+          return { skipped: true, reason: 'No emails to embed' };
+        }
+        
+        console.log(`[Gmail Inngest] Generating embeddings for ${emails.length} emails...`);
+        
+        // Fetch the stored emails to get their database IDs
+        const { data: storedEmails } = await supa
+          .from('emails')
+          .select('id, subject, sender, snippet, received_at')
+          .eq('user_id', userId)
+          .order('received_at', { ascending: false })
+          .limit(100);
+        
+        if (!storedEmails || storedEmails.length === 0) {
+          return { skipped: true, reason: 'No emails found in database' };
+        }
+        
+        const inputs = buildEmailEmbeddingInputs(storedEmails);
+        console.log(`[Gmail Inngest] Built ${inputs.length} embedding inputs`);
+        
+        const result = await generateEmbeddings(userId, inputs);
+        console.log(`[Gmail Inngest] Embeddings complete: embedded=${result.embedded}, skipped=${result.skipped}, errors=${result.errors.length}`);
+        
+        return {
+          success: true,
+          embedded: result.embedded,
+          skipped: result.skipped,
+          errors: result.errors,
+        };
       });
+      
+      console.log('[Gmail Inngest] Embedding result:', embeddingResult);
 
       // NOTE: Briefing generation is now handled ONLY by sync-manager
       // This prevents duplicate briefing generation when:
@@ -522,7 +556,8 @@ export const processGmailConnection = inngest.createFunction(
 
 export const syncCalendarEvents = inngest.createFunction(
   { id: 'sync-calendar-events', name: 'Sync Calendar Events', retries: 3 },
-  { event: 'calendar/connection.established' },
+  // Listen to BOTH initial connection AND manual/auto sync requests
+  [{ event: 'calendar/connection.established' }, { event: 'calendar/sync.requested' }],
   async ({ event, step }) => {
     const { userId, connectionId, trigger = 'connect' } = event.data as {
       userId: string;
@@ -536,10 +571,10 @@ export const syncCalendarEvents = inngest.createFunction(
         .from('sync_status')
         .upsert(
           {
-            user_id: userId,
+          user_id: userId,
             status: 'fetching',
             current_provider: 'calendar',
-            updated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
           },
           { onConflict: 'user_id' }
         );
@@ -623,6 +658,7 @@ export const syncCalendarEvents = inngest.createFunction(
         return {
           eventId: item.id,
           title: item.summary || 'Untitled Event',
+          description: item.description || '', // Capture meeting description/agenda
           startTime: start,
           endTime: end,
           location: item.location || undefined,
@@ -688,7 +724,7 @@ export const syncCalendarEvents = inngest.createFunction(
           user_id: userId,
           event_id: ev.eventId,
           title: ev.title,
-          description: '',
+          description: ev.description || '', // Include meeting description/agenda
           start_time: ev.startTime,
           end_time: ev.endTime,
           location: ev.location,
@@ -738,21 +774,6 @@ export const syncCalendarEvents = inngest.createFunction(
       }
     });
 
-    await step.run('update-status-complete-calendar', async () => {
-      const { error } = await supa
-        .from('sync_status')
-        .upsert(
-          {
-            user_id: userId,
-            status: 'complete',
-            current_provider: null,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'user_id' }
-        );
-      if (error) throw error;
-    });
-
     await step.run('update-connection-last-sync-calendar', async () => {
       // Update last_sync_at AND store the new syncToken for delta sync
       const { data: existingConn } = await supa
@@ -777,22 +798,100 @@ export const syncCalendarEvents = inngest.createFunction(
         .eq('provider', 'calendar');
     });
 
-    // Emit event for calendar analysis
+    // Run calendar analysis DIRECTLY (instead of emitting event)
+    // CRITICAL: Must run BEFORE status becomes 'complete' so API route can return results
+    const analysisResult = await step.run('run-calendar-analysis', async () => {
+      if (events.length === 0) {
+        console.log('[Calendar Inngest] Skipping analysis (no events)');
+        return { skipped: true, reason: 'No events to analyze' };
+      }
+      
+      console.log(`[Calendar Inngest] Running analysis for ${events.length} events...`);
+      try {
+        const result = await runCalendarAnalysisForUser({ userId });
+        console.log(`[Calendar Inngest] Analysis complete:`, result);
+        return {
+          success: true,
+          eventsAnalyzed: result.eventsAnalyzed,
+          conflictsCount: result.conflictsCount,
+          totalIssues: result.totalIssues,
+        };
+      } catch (err) {
+        console.error('[Calendar Inngest] Analysis failed:', err);
+        return { 
+          success: false, 
+          error: err instanceof Error ? err.message : 'Analysis failed' 
+        };
+      }
+    });
+    
+    console.log('[Calendar Inngest] Analysis result:', analysisResult);
+
+    // Generate embeddings DIRECTLY (more reliable than separate event)
+    // CRITICAL: Must run BEFORE status becomes 'complete'
+    const embeddingResult = await step.run('generate-embeddings-calendar', async () => {
+      if (!process.env.OPENAI_API_KEY) {
+        console.log('[Calendar Inngest] OPENAI_API_KEY not configured, skipping embeddings');
+        return { skipped: true, reason: 'OPENAI_API_KEY not configured' };
+      }
+      
+      if (events.length === 0) {
+        return { skipped: true, reason: 'No events to embed' };
+      }
+      
+      console.log(`[Calendar Inngest] Generating embeddings for ${events.length} events...`);
+      
+      // Fetch the stored events to get their database IDs
+      const { data: storedEvents } = await supa
+        .from('calendar_events')
+        .select('id, title, description, location, start_time, end_time, attendees')
+        .eq('user_id', userId)
+        .order('start_time', { ascending: false })
+        .limit(100);
+      
+      if (!storedEvents || storedEvents.length === 0) {
+        return { skipped: true, reason: 'No events found in database' };
+      }
+      
+      const inputs = buildCalendarEmbeddingInputs(storedEvents);
+      console.log(`[Calendar Inngest] Built ${inputs.length} embedding inputs`);
+      
+      const result = await generateEmbeddings(userId, inputs);
+      console.log(`[Calendar Inngest] Embeddings complete: embedded=${result.embedded}, skipped=${result.skipped}`);
+      
+      return {
+        success: true,
+        embedded: result.embedded,
+        skipped: result.skipped,
+        errors: result.errors,
+      };
+    });
+    
+    console.log('[Calendar Inngest] Embedding result:', embeddingResult);
+
+    // CRITICAL: Set status to 'complete' AFTER analysis and embeddings are done
+    // This is what the API route polls for - it must be LAST before return
+    await step.run('update-status-complete-calendar', async () => {
+      const { error } = await supa
+        .from('sync_status')
+        .upsert(
+          {
+            user_id: userId,
+            status: 'complete',
+            current_provider: null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id' }
+        );
+      if (error) throw error;
+    });
+
+    // Emit event for cron job listeners (with fromSync flag to prevent duplicate analysis)
     await step.run('emit-calendar-events-synced', async () => {
       await inngest.send({
         name: 'calendar/events.synced',
-        data: { userId, timestamp: new Date().toISOString() },
+        data: { userId, timestamp: new Date().toISOString(), fromSync: true },
       });
-    });
-
-    // Trigger background embedding generation
-    await step.run('trigger-embedding-generation-calendar', async () => {
-      if (process.env.OPENAI_API_KEY && events.length > 0) {
-        await inngest.send({
-          name: 'embeddings/generate.requested',
-          data: { userId, sourceType: 'calendar', timestamp: new Date().toISOString() },
-        });
-      }
     });
 
     // NOTE: Briefing generation is now handled ONLY by sync-manager
@@ -803,6 +902,7 @@ export const syncCalendarEvents = inngest.createFunction(
       userId,
       eventsProcessed: events.length,
       syncResult: calendarResult,
+      analysisResult,
       trigger,
       timestamp: new Date().toISOString(),
     };
@@ -817,7 +917,14 @@ export const analyzeCalendar = inngest.createFunction(
   { id: 'analyze-calendar', name: 'Analyze Calendar', retries: 2 },
   { event: 'calendar/events.synced' },
   async ({ event, step }) => {
-    const { userId } = event.data as { userId: string };
+    const { userId, fromSync } = event.data as { userId: string; fromSync?: boolean };
+    
+    // Skip if triggered from sync (analysis already ran inline)
+    if (fromSync) {
+      console.log('[Calendar Analysis] Skipping - already ran during sync');
+      return { skipped: true, reason: 'Already ran during sync', timestamp: new Date().toISOString() };
+    }
+    
     const result = await step.run('run-calendar-analysis', async () => runCalendarAnalysisForUser({ userId }));
     return { ...result, timestamp: new Date().toISOString() };
   }
@@ -865,7 +972,8 @@ export const analyzeCalendarCron = inngest.createFunction(
 
 export const syncDriveDocuments = inngest.createFunction(
   { id: 'sync-drive-documents', name: 'Sync Drive Documents', retries: 3 },
-  { event: 'drive/connection.established' },
+  // Listen to BOTH initial connection AND manual/auto sync requests
+  [{ event: 'drive/connection.established' }, { event: 'drive/sync.requested' }],
   async ({ event, step }) => {
     const { userId, connectionId, trigger = 'connect' } = event.data as {
       userId: string;
@@ -1001,10 +1109,10 @@ export const syncDriveDocuments = inngest.createFunction(
         .from('sync_status')
         .upsert(
           {
-            user_id: userId,
-            status: 'complete',
+          user_id: userId,
+          status: 'complete',
             current_provider: null,
-            updated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
           },
           { onConflict: 'user_id' }
         );
@@ -1019,15 +1127,46 @@ export const syncDriveDocuments = inngest.createFunction(
         .eq('provider', 'drive');
     });
 
-    // Trigger background embedding generation
-    await step.run('trigger-embedding-generation-drive', async () => {
-      if (process.env.OPENAI_API_KEY && files.length > 0) {
-        await inngest.send({
-          name: 'embeddings/generate.requested',
-          data: { userId, sourceType: 'drive', timestamp: new Date().toISOString() },
-        });
+    // Generate embeddings DIRECTLY (more reliable than separate event)
+    const embeddingResult = await step.run('generate-embeddings-drive', async () => {
+      if (!process.env.OPENAI_API_KEY) {
+        console.log('[Drive Inngest] OPENAI_API_KEY not configured, skipping embeddings');
+        return { skipped: true, reason: 'OPENAI_API_KEY not configured' };
       }
+      
+      if (files.length === 0) {
+        return { skipped: true, reason: 'No files to embed' };
+      }
+      
+      console.log(`[Drive Inngest] Generating embeddings for ${files.length} files...`);
+      
+      // Fetch the stored files to get their database IDs
+      const { data: storedFiles } = await supa
+        .from('drive_documents')
+        .select('id, name, mime_type, folder_path, modified_at')
+        .eq('user_id', userId)
+        .order('modified_at', { ascending: false })
+        .limit(100);
+      
+      if (!storedFiles || storedFiles.length === 0) {
+        return { skipped: true, reason: 'No files found in database' };
+      }
+      
+      const inputs = buildDriveEmbeddingInputs(storedFiles);
+      console.log(`[Drive Inngest] Built ${inputs.length} embedding inputs`);
+      
+      const result = await generateEmbeddings(userId, inputs);
+      console.log(`[Drive Inngest] Embeddings complete: embedded=${result.embedded}, skipped=${result.skipped}`);
+      
+      return {
+        success: true,
+        embedded: result.embedded,
+        skipped: result.skipped,
+        errors: result.errors,
+      };
     });
+    
+    console.log('[Drive Inngest] Embedding result:', embeddingResult);
 
     // NOTE: Briefing generation is now handled ONLY by sync-manager
     // This prevents duplicate briefing generation.

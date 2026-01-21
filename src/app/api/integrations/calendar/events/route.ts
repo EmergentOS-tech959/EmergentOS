@@ -5,6 +5,7 @@ import { Nango } from '@nangohq/node';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { scanContent } from '@/lib/nightfall';
 import { upsertPiiVaultTokens } from '@/lib/pii-vault';
+import { generateBriefingForUser } from '@/lib/briefing-generator';
 
 export async function GET() {
   const { userId } = await auth();
@@ -31,7 +32,27 @@ export async function GET() {
     return NextResponse.json({ error: 'Failed to fetch events' }, { status: 500 });
   }
 
-  return NextResponse.json({ events: data || [] });
+  // Map event_id to id for frontend compatibility
+  // Frontend uses 'id' to refer to events, but we store 'event_id' (Google Calendar ID)
+  type CalendarEventRow = {
+    id: string;
+    event_id: string;
+    title: string;
+    start_time: string;
+    end_time: string;
+    location?: string;
+    description?: string;
+    has_conflict: boolean;
+    status: string;
+    attendees?: unknown[];
+    [key: string]: unknown;
+  };
+  const mappedEvents = ((data || []) as CalendarEventRow[]).map(event => ({
+    ...event,
+    id: event.event_id, // Use Google Calendar event_id as the primary identifier
+  }));
+
+  return NextResponse.json({ events: mappedEvents });
 }
 
 export async function POST(req: Request) {
@@ -139,7 +160,18 @@ export async function POST(req: Request) {
       console.error('Failed to upsert calendar event', upsertError);
     }
 
-    return NextResponse.json({ success: true, eventId: created.id });
+    // CRITICAL: Regenerate briefing after event creation
+    // Calendar data changed, so briefing should reflect the new event
+    try {
+      console.log('[Calendar Event Create] Triggering briefing regeneration');
+      await generateBriefingForUser({ userId });
+      console.log('[Calendar Event Create] Briefing regenerated successfully');
+    } catch (briefingError) {
+      console.error('[Calendar Event Create] Briefing regeneration failed:', briefingError);
+      // Don't fail the request - event was created successfully
+    }
+
+    return NextResponse.json({ success: true, eventId: created.id, briefingRegenerated: true });
   } catch (error) {
     console.error('Error creating calendar event', error);
     return NextResponse.json({ error: 'Failed to create event' }, { status: 500 });

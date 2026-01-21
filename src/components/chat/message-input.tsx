@@ -26,14 +26,14 @@ export function MessageInput({
   };
 
   return (
-    <div className="p-4 border-t border-border">
+    <div className="p-3 border-t border-border bg-secondary/20">
       <div className="flex items-end gap-2">
         <Textarea
           placeholder={placeholder || 'Type a message…'}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           disabled={disabled}
-          className="min-h-[44px] max-h-40 resize-none"
+          className="min-h-[36px] max-h-24 resize-none text-xs bg-background"
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
@@ -42,16 +42,16 @@ export function MessageInput({
           }}
         />
         <Button
-          size="icon"
+          size="sm"
           onClick={submit}
           disabled={disabled || !value.trim()}
-          className="bg-primary hover:bg-primary/90"
+          className="h-9 w-9 p-0 bg-teal-500 hover:bg-teal-600"
         >
-          <Send className="h-4 w-4" />
+          <Send className="h-3.5 w-3.5" />
         </Button>
       </div>
-      <p className="text-[10px] text-muted-foreground mt-2 text-center">
-        Messages are scanned with DLP before any storage or AI processing.
+      <p className="text-[9px] text-muted-foreground/60 mt-2 text-center">
+        Messages are scanned with DLP before processing.
       </p>
     </div>
   );

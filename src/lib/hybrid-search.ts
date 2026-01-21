@@ -354,6 +354,7 @@ export async function enrichSearchResults(
 
 /**
  * Quick search for chat context (optimized for speed)
+ * Returns FULL content for AI to use in answering questions
  */
 export async function searchForChatContext(
   userId: string,
@@ -413,17 +414,77 @@ export async function searchForChatContext(
     };
   });
 
-  // Build context string
-  const contextLines = sources.map((s) => {
-    const tag = `[${s.kind}:${s.id}]`;
-    const when = s.occurredAt ? ` @ ${s.occurredAt}` : '';
-    const snippet = s.snippet ? ` — ${s.snippet}` : '';
-    return `${tag}${when} ${s.title}${snippet}`;
+  // Build DETAILED context string with full information for the AI
+  const contextLines = enrichedResults.map((r) => {
+    const lines: string[] = [];
+    
+    switch (r.sourceType) {
+      case 'email': {
+        const sender = r.metadata.sender || 'Unknown sender';
+        const subject = r.metadata.subject || '(no subject)';
+        const received = r.metadata.received_at 
+          ? new Date(r.metadata.received_at as string).toLocaleString()
+          : 'Unknown date';
+        const preview = r.metadata.snippet || r.metadata.body_preview || r.content || '';
+        
+        lines.push(`📧 EMAIL [${r.sourceId.slice(0, 8)}]`);
+        lines.push(`   From: ${sender}`);
+        lines.push(`   Subject: ${subject}`);
+        lines.push(`   Date: ${received}`);
+        if (preview) {
+          lines.push(`   Content: ${String(preview).slice(0, 500)}`);
+        }
+        break;
+      }
+      case 'calendar': {
+        const title = r.metadata.title || 'Untitled Event';
+        const start = r.metadata.start_time as string | undefined;
+        const end = r.metadata.end_time as string | undefined;
+        const location = r.metadata.location as string | undefined;
+        const description = r.metadata.description as string | undefined;
+        const attendees = r.metadata.attendees as unknown[] | undefined;
+        
+        lines.push(`📅 CALENDAR EVENT [${r.sourceId.slice(0, 8)}]`);
+        lines.push(`   Title: ${title}`);
+        if (start) lines.push(`   Start: ${new Date(start).toLocaleString()}`);
+        if (end) lines.push(`   End: ${new Date(end).toLocaleString()}`);
+        if (location) lines.push(`   Location: ${location}`);
+        if (description) lines.push(`   Description: ${String(description).slice(0, 300)}`);
+        if (attendees && attendees.length > 0) lines.push(`   Attendees: ${attendees.length} people`);
+        break;
+      }
+      case 'drive': {
+        const name = r.metadata.name || 'Untitled Document';
+        const mimeType = r.metadata.mime_type as string | undefined;
+        const folder = r.metadata.folder_path as string | undefined;
+        const modified = r.metadata.modified_at as string | undefined;
+        const link = r.metadata.web_view_link as string | undefined;
+        
+        lines.push(`📄 DOCUMENT [${r.sourceId.slice(0, 8)}]`);
+        lines.push(`   Name: ${name}`);
+        if (mimeType) lines.push(`   Type: ${mimeType}`);
+        if (folder) lines.push(`   Folder: ${folder}`);
+        if (modified) lines.push(`   Modified: ${new Date(modified).toLocaleString()}`);
+        if (link) lines.push(`   Link: ${link}`);
+        break;
+      }
+      case 'briefing': {
+        const date = r.metadata.briefing_date || 'Unknown';
+        const summary = r.metadata.summary || r.content || '';
+        
+        lines.push(`📋 DAILY BRIEFING [${r.sourceId.slice(0, 8)}]`);
+        lines.push(`   Date: ${date}`);
+        if (summary) lines.push(`   Summary: ${String(summary).slice(0, 500)}`);
+        break;
+      }
+    }
+    
+    return lines.join('\n');
   });
 
-  const context = contextLines.length
-    ? `## Relevant Context\n${contextLines.map((l) => `- ${l}`).join('\n')}\n`
-    : `## Relevant Context\n- (No matching context found)\n`;
+  const context = contextLines.length > 0
+    ? `## Relevant Context (${contextLines.length} items found)\n\n${contextLines.join('\n\n')}\n`
+    : `## Relevant Context\n\n(No matching emails, events, or documents found for your query. Try different keywords.)\n`;
 
   return { context, sources };
 }

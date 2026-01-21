@@ -63,6 +63,7 @@ export function CalendarModal({
   onClose,
   events,
   onEventCreate,
+  onEventUpdate,
   onEventDelete,
   isConnected,
   lastSyncDisplay,
@@ -125,9 +126,18 @@ export function CalendarModal({
         endDateTime.setDate(endDateTime.getDate() + 1);
       }
       
-      if (editingEvent) {
-        toast.info('Editing events is not yet supported');
+      if (editingEvent && onEventUpdate) {
+        // Update existing event
+        await onEventUpdate(editingEvent.id, {
+          title: formData.title,
+          start_time: startDateTime.toISOString(),
+          end_time: endDateTime.toISOString(),
+          location: formData.location || undefined,
+          description: formData.description || undefined,
+        });
+        toast.success('Event updated');
       } else if (onEventCreate) {
+        // Create new event
         await onEventCreate({
           title: formData.title,
           start_time: startDateTime.toISOString(),
@@ -222,74 +232,103 @@ export function CalendarModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-6xl w-[95vw] h-[90vh] max-h-[900px] p-0 flex flex-col bg-white dark:bg-[#0d1117] border-gray-200 dark:border-[#30363d]">
+      <DialogContent className="max-w-[1100px] w-[92vw] h-[85vh] max-h-[800px] p-0 flex flex-col bg-background border-border/50 rounded-xl overflow-hidden">
         {/* Header */}
-        <div className="shrink-0 px-6 py-4 border-b border-gray-200 dark:border-[#30363d]">
+        <div className="shrink-0 px-5 py-4 border-b border-border/50 bg-secondary/30">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-1 bg-gray-100 dark:bg-[#21262d] rounded-lg p-1">
-                <Button variant="ghost" size="sm" onClick={goToPrevDay} className="h-8 w-8 p-0">
+              {/* Navigation */}
+              <div className="flex items-center gap-0.5 bg-secondary/50 border border-border/30 rounded-lg p-0.5">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={goToPrevDay} 
+                  className="h-8 w-8 p-0 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground"
+                >
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={goToToday} className="h-8 px-3 text-sm">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={goToToday} 
+                  className="h-8 px-3 rounded-md text-xs font-medium hover:bg-secondary text-muted-foreground hover:text-foreground"
+                >
                   Today
                 </Button>
-                <Button variant="ghost" size="sm" onClick={goToNextDay} className="h-8 w-8 p-0">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={goToNextDay} 
+                  className="h-8 w-8 p-0 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground"
+                >
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
               
               <div>
-                <DialogTitle className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                  {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-                  {isToday && <span className="text-xs bg-teal-500 text-white px-2 py-0.5 rounded-full">Today</span>}
+                <DialogTitle className="text-base font-semibold text-foreground flex items-center gap-2">
+                  {selectedDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                  {isToday && (
+                    <span className="text-[10px] bg-teal-500 text-white px-2 py-0.5 rounded-full font-medium">
+                      Today
+                    </span>
+                  )}
                 </DialogTitle>
                 <div className="flex items-center gap-3 mt-0.5">
-                  <span className="text-sm text-gray-500">{dayEvents.length} event{dayEvents.length !== 1 ? 's' : ''}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {dayEvents.length} event{dayEvents.length !== 1 ? 's' : ''}
+                  </span>
                   {conflictCount > 0 && (
-                    <span className="text-sm text-amber-500 flex items-center gap-1">
+                    <span className="text-xs text-amber-500 flex items-center gap-1">
                       <AlertTriangle className="h-3 w-3" />
                       {conflictCount} conflict{conflictCount !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                  {lastSyncDisplay !== 'Never synced' && (
+                    <span className="text-xs text-muted-foreground/60 flex items-center gap-1">
+                      <Clock className="h-3 w-3" />
+                      {lastSyncDisplay}
                     </span>
                   )}
                 </div>
               </div>
             </div>
             
-            <div className="flex items-center gap-2">
-              {lastSyncDisplay !== 'Never synced' && (
-                <span className="text-xs text-gray-500 mr-2">
-                  <Clock className="h-3 w-3 inline mr-1" />
-                  {lastSyncDisplay}
-                </span>
-              )}
-              <Button size="sm" onClick={openNewEventForm} className="gap-2 bg-teal-500 hover:bg-teal-600">
-                <Plus className="h-4 w-4" />
+            <Button 
+              size="sm" 
+              onClick={openNewEventForm} 
+              className="gap-1.5 bg-teal-500 hover:bg-teal-600 text-white font-medium h-8 px-3 text-xs"
+            >
+              <Plus className="h-3.5 w-3.5" />
                 New Event
               </Button>
-              <Button variant="ghost" size="sm" onClick={onClose} className="h-9 w-9 p-0">
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
           </div>
         </div>
 
         {/* Calendar Grid */}
         <div className="flex-1 flex overflow-hidden">
           {/* Time Grid */}
-          <div ref={scrollContainerRef} className="flex-1 overflow-y-auto relative">
+          <div ref={scrollContainerRef} className="flex-1 overflow-y-auto relative eos-scrollbar">
             {!isConnected ? (
               <div className="flex flex-col items-center justify-center h-full p-8 text-center">
-                <CalendarDays className="h-16 w-16 text-gray-400 mb-4" />
-                <p className="text-lg font-medium text-gray-900 dark:text-white mb-2">Calendar Not Connected</p>
-                <p className="text-sm text-gray-500 mb-4">Connect your Google Calendar to view and manage events.</p>
+                <div className="w-14 h-14 rounded-xl bg-sky-500/10 flex items-center justify-center mb-4">
+                  <CalendarDays className="h-7 w-7 text-sky-500" />
+                </div>
+                <p className="text-base font-semibold text-foreground mb-1">Calendar Not Connected</p>
+                <p className="text-xs text-muted-foreground max-w-xs">
+                  Connect your Google Calendar to view and manage your events.
+                </p>
               </div>
             ) : (
               <div className="relative" style={{ height: 24 * HOUR_HEIGHT }}>
                 {/* Hour lines */}
                 {HOURS.map(hour => (
-                  <div key={hour} className="absolute w-full border-t border-gray-100 dark:border-gray-800" style={{ top: hour * HOUR_HEIGHT }}>
-                    <span className="absolute left-3 -top-2.5 text-xs text-gray-400 w-10">
+                  <div 
+                    key={hour} 
+                    className="absolute w-full border-t border-border/30" 
+                    style={{ top: hour * HOUR_HEIGHT }}
+                  >
+                    <span className="absolute left-3 -top-2 text-[10px] text-muted-foreground/50 font-medium w-10">
                       {hour === 0 ? '12 AM' : hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`}
                     </span>
                   </div>
@@ -299,8 +338,8 @@ export function CalendarModal({
                 {currentTimePosition !== null && (
                   <div className="absolute w-full z-20 pointer-events-none" style={{ top: currentTimePosition }}>
                     <div className="flex items-center">
-                      <div className="w-3 h-3 rounded-full bg-red-500 -ml-1.5" />
-                      <div className="flex-1 h-0.5 bg-red-500" />
+                      <div className="w-2 h-2 rounded-full bg-red-500 -ml-1" />
+                      <div className="flex-1 h-px bg-red-500" />
                     </div>
                   </div>
                 )}
@@ -324,11 +363,11 @@ export function CalendarModal({
                           setShowEventForm(true);
                         }}
                         className={cn(
-                          'absolute rounded-lg px-3 py-1.5 text-left text-sm overflow-hidden transition-all',
-                          'hover:ring-2 hover:ring-offset-1 hover:z-30',
+                          'absolute rounded-lg px-2.5 py-1.5 text-left text-xs overflow-hidden transition-all',
+                          'hover:brightness-110 hover:z-30',
                           event.has_conflict
-                            ? 'bg-amber-100 dark:bg-amber-500/20 text-amber-900 dark:text-amber-300 border-l-4 border-l-amber-500 hover:ring-amber-500'
-                            : 'bg-teal-100 dark:bg-teal-500/20 text-teal-900 dark:text-teal-300 border-l-4 border-l-teal-500 hover:ring-teal-500'
+                            ? 'bg-amber-500/15 text-foreground border-l-2 border-l-amber-500'
+                            : 'bg-teal-500/15 text-foreground border-l-2 border-l-teal-500'
                         )}
                         style={{ 
                           top: pos.top, 
@@ -337,11 +376,14 @@ export function CalendarModal({
                           left: pos.left,
                         }}
                       >
-                        <p className="font-medium truncate">{event.title}</p>
-                        <p className="text-xs opacity-75 truncate">
+                        <p className="font-medium truncate text-xs">{event.title}</p>
+                        <p className="text-[10px] text-muted-foreground truncate">
                           {new Date(event.start_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
                           {event.location && ` · ${event.location.includes('http') ? 'Online' : event.location}`}
                         </p>
+                        {event.has_conflict && (
+                          <AlertTriangle className="absolute top-1.5 right-1.5 h-3 w-3 text-amber-500" />
+                        )}
                       </button>
                     );
                   })
@@ -352,36 +394,43 @@ export function CalendarModal({
 
           {/* Event Form Sidebar */}
           {showEventForm && (
-            <div className="w-80 border-l border-gray-200 dark:border-[#30363d] p-4 bg-gray-50 dark:bg-[#161b22] overflow-y-auto">
+            <div className="w-80 border-l border-border/50 p-4 bg-secondary/30 overflow-y-auto eos-scrollbar-thin">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-gray-900 dark:text-white">
+                <h3 className="font-semibold text-sm text-foreground">
                   {editingEvent ? 'Edit Event' : 'New Event'}
                 </h3>
-                <Button variant="ghost" size="sm" onClick={() => setShowEventForm(false)} className="h-8 w-8 p-0">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => setShowEventForm(false)} 
+                  className="h-7 w-7 p-0 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground"
+                >
                   <X className="h-4 w-4" />
                 </Button>
               </div>
               
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
-                  <Label htmlFor="title" className="text-sm">Title</Label>
+                  <Label htmlFor="title" className="text-xs font-medium text-muted-foreground">Title</Label>
                   <Input
                     id="title"
                     value={formData.title}
                     onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
                     placeholder="Event title"
-                    className="mt-1"
+                    className="mt-1.5 h-9 text-sm"
                     autoFocus
                   />
                 </div>
                 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <Label className="text-sm">Start Time</Label>
+                    <Label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                      <Clock className="h-3 w-3" /> Start
+                    </Label>
                     <select
                       value={formData.startTime}
                       onChange={(e) => setFormData(prev => ({ ...prev, startTime: e.target.value }))}
-                      className="mt-1 w-full h-9 px-3 rounded-md border border-input bg-background text-sm"
+                      className="mt-1.5 w-full h-9 px-3 rounded-md border border-border bg-background text-xs text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
                     >
                       {TIME_OPTIONS.map(opt => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -389,11 +438,13 @@ export function CalendarModal({
                     </select>
                   </div>
                   <div>
-                    <Label className="text-sm">End Time</Label>
+                    <Label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                      <Clock className="h-3 w-3" /> End
+                    </Label>
                     <select
                       value={formData.endTime}
                       onChange={(e) => setFormData(prev => ({ ...prev, endTime: e.target.value }))}
-                      className="mt-1 w-full h-9 px-3 rounded-md border border-input bg-background text-sm"
+                      className="mt-1.5 w-full h-9 px-3 rounded-md border border-border bg-background text-xs text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
                     >
                       {TIME_OPTIONS.map(opt => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -403,7 +454,7 @@ export function CalendarModal({
                 </div>
                 
                 <div>
-                  <Label htmlFor="location" className="text-sm flex items-center gap-1">
+                  <Label htmlFor="location" className="text-xs font-medium text-muted-foreground flex items-center gap-1">
                     <MapPin className="h-3 w-3" /> Location
                   </Label>
                   <Input
@@ -411,12 +462,12 @@ export function CalendarModal({
                     value={formData.location}
                     onChange={(e) => setFormData(prev => ({ ...prev, location: e.target.value }))}
                     placeholder="Add location or link"
-                    className="mt-1"
+                    className="mt-1.5 h-9 text-sm"
                   />
                 </div>
                 
                 <div>
-                  <Label htmlFor="description" className="text-sm flex items-center gap-1">
+                  <Label htmlFor="description" className="text-xs font-medium text-muted-foreground flex items-center gap-1">
                     <FileText className="h-3 w-3" /> Description
                   </Label>
                   <Textarea
@@ -424,30 +475,41 @@ export function CalendarModal({
                     value={formData.description}
                     onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
                     placeholder="Add description"
-                    className="mt-1"
+                    className="mt-1.5 text-sm resize-none"
                     rows={3}
                   />
                 </div>
                 
-                <div className="flex gap-2 pt-2">
+                <div className="flex gap-2 pt-3 border-t border-border/50">
                   {editingEvent && onEventDelete && (
                     <Button
                       type="button"
-                      variant="destructive"
+                      variant="ghost"
                       size="sm"
                       onClick={handleDeleteEvent}
                       disabled={isSubmitting}
-                      className="gap-1"
+                      className="gap-1 text-red-500 hover:text-red-600 hover:bg-red-500/10 h-8 text-xs"
                     >
                       <Trash2 className="h-3 w-3" />
                       Delete
                     </Button>
                   )}
                   <div className="flex-1" />
-                  <Button type="button" variant="outline" size="sm" onClick={() => setShowEventForm(false)}>
+                  <Button 
+                    type="button" 
+                    variant="ghost" 
+                    size="sm" 
+                    onClick={() => setShowEventForm(false)}
+                    className="h-8 text-xs text-muted-foreground"
+                  >
                     Cancel
                   </Button>
-                  <Button type="submit" size="sm" disabled={isSubmitting} className="bg-teal-500 hover:bg-teal-600">
+                  <Button 
+                    type="submit" 
+                    size="sm" 
+                    disabled={isSubmitting} 
+                    className="bg-teal-500 hover:bg-teal-600 text-white font-medium h-8 px-4 text-xs"
+                  >
                     {isSubmitting ? 'Saving...' : editingEvent ? 'Update' : 'Create'}
                   </Button>
                 </div>

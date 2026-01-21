@@ -31,20 +31,20 @@ export function KeyDecisionsWidget() {
         
         <h4 className="font-semibold text-foreground mb-1">No Pending Decisions</h4>
         <p className="text-xs text-muted-foreground mb-6 max-w-[180px] leading-relaxed">
-          You&apos;re all caught up on strategic decisions.
-        </p>
-        
-        <Button 
-          variant="outline" 
-          size="sm"
+        You&apos;re all caught up on strategic decisions.
+      </p>
+      
+      <Button 
+        variant="outline" 
+        size="sm"
           className="gap-2 group font-medium"
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent('open-omni-panel'));
-          }}
-        >
+        onClick={() => {
+          window.dispatchEvent(new CustomEvent('open-omni-panel'));
+        }}
+      >
           <Sparkles className="h-3.5 w-3.5 text-ai-copper group-hover:text-ai-copper transition-colors" />
           Ask Strategic Question
-        </Button>
+      </Button>
       </div>
 
       {/* Footer */}

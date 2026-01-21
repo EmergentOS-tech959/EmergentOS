@@ -77,18 +77,18 @@ export function Header({
         
         {/* User Button */}
         <div className="relative">
-          <UserButton
-            afterSignOutUrl="/"
-            appearance={{
-              elements: {
+        <UserButton
+          afterSignOutUrl="/"
+          appearance={{
+            elements: {
                 avatarBox: cn(
                   'h-10 w-10',
                   'ring-2 ring-border hover:ring-primary/50',
                   'transition-all duration-200'
                 ),
-              },
-            }}
-          />
+            },
+          }}
+        />
         </div>
       </div>
     </header>

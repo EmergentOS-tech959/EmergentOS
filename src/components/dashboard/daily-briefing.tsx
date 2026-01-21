@@ -47,7 +47,7 @@ export function DailyBriefingWidget() {
   // Use centralized sync manager for provider status
   // NOTE: Refresh button removed - use unified refresh in dashboard header
   const { providers, isSyncing } = useSyncManager();
-  
+
   // REAL-TIME TIMESTAMP: Tick state forces re-render every minute for live updates
   const [timeTick, setTimeTick] = useState(0);
   const tickIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -248,14 +248,14 @@ export function DailyBriefingWidget() {
 
   // No briefing yet
   if (!briefing) {
-    return (
+  return (
       <Card className="p-6 h-full flex flex-col">
         <div className="flex items-start justify-between mb-5">
           <div className="widget-header">
             <div className="widget-icon bg-gradient-to-br from-amber-500/20 to-orange-500/10 ring-1 ring-amber-500/20">
               <Sparkles className="h-5 w-5 text-amber-400" />
-            </div>
-            <div>
+          </div>
+          <div>
               <h3 className="widget-title">Daily Briefing</h3>
               <p className="widget-subtitle">{connectedProviders.length} source{connectedProviders.length !== 1 ? 's' : ''} connected</p>
             </div>
@@ -290,15 +290,15 @@ export function DailyBriefingWidget() {
               </div>
             </div>
           </div>
-        </div>
+      </div>
 
         {/* Source pills */}
         <SourcePills providers={providers} disconnectedCount={disconnectedProviders.length} />
 
         {/* Summary */}
         <p className="text-sm text-foreground/80 leading-relaxed line-clamp-3 mb-5">
-          {briefing.summary}
-        </p>
+            {briefing.summary}
+          </p>
 
         {/* Key Priorities */}
         {briefing.key_priorities && briefing.key_priorities.length > 0 && (
@@ -395,56 +395,60 @@ interface BriefingModalProps {
 function BriefingModal({ isOpen, onClose, briefing, providers, globalSyncDisplay }: BriefingModalProps) {
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-5xl w-[95vw] h-[90vh] max-h-[900px] p-0 flex flex-col bg-background border-border rounded-2xl overflow-hidden">
+      <DialogContent className="max-w-[1100px] w-[92vw] h-[85vh] max-h-[800px] p-0 flex flex-col bg-background border-border/50 rounded-xl overflow-hidden">
         {/* Header */}
-        <div className="shrink-0 px-6 py-5 border-b border-border bg-card">
-          <div className="flex items-start justify-between gap-4">
+        <div className="shrink-0 px-6 py-5 border-b border-border/50 bg-secondary/30">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <div className="absolute inset-0 bg-gradient-to-br from-amber-500/30 to-orange-500/20 rounded-2xl blur-md" />
-                <div className="relative w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/10 flex items-center justify-center ring-1 ring-amber-500/20">
-                  <Sparkles className="h-7 w-7 text-amber-400" />
-                </div>
+              <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
+                <Sparkles className="h-5 w-5 text-white" />
               </div>
               <div>
-                <DialogTitle className="text-xl font-bold text-foreground">Daily Strategic Briefing</DialogTitle>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+                <DialogTitle className="text-lg font-semibold text-foreground">
+                  Daily Briefing
+                </DialogTitle>
+                <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5">
+                  <Calendar className="h-3 w-3" />
+                  {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                  <span className="mx-1.5 text-border">·</span>
+                  <Clock className="h-3 w-3" />
+                  {globalSyncDisplay}
                 </p>
               </div>
             </div>
-            <span className="text-xs text-muted-foreground flex items-center gap-1.5">
-              <Clock className="h-3.5 w-3.5" /> {globalSyncDisplay}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 mt-5">
+            
+            {/* Data Sources */}
+            <div className="flex items-center gap-2">
             {(['gmail', 'calendar', 'drive'] as ProviderKey[]).map((p) => {
-              const { icon: Icon, label, color, bg, border } = PROVIDERS[p];
+                const { icon: Icon, label, color } = PROVIDERS[p];
               const isConnected = providers[p].status === 'connected';
               return (
-                <div key={p} className={cn(
-                  'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all',
-                  isConnected ? cn(bg, border) : 'bg-secondary/50 border border-border'
-                )}>
-                  <Icon className={cn('h-4 w-4', isConnected ? color : 'text-muted-foreground/50')} />
-                  <span className={isConnected ? 'text-foreground' : 'text-muted-foreground/50'}>{label}</span>
-                  {isConnected ? <CheckCircle2 className="h-4 w-4 text-status-green" /> : <AlertTriangle className="h-4 w-4 text-status-amber" />}
+                  <div key={p} className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                    isConnected 
+                      ? 'bg-secondary/50 border-border/50' 
+                      : 'bg-secondary/20 border-transparent opacity-40'
+                  )}>
+                    <Icon className={cn('h-3.5 w-3.5', isConnected ? color : 'text-muted-foreground')} />
+                    <span className="text-muted-foreground hidden sm:inline">{label}</span>
+                    {isConnected && <CheckCircle2 className="h-3 w-3 text-emerald-500" />}
                 </div>
               );
             })}
+            </div>
           </div>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 eos-scrollbar">
+        <div className="flex-1 overflow-y-auto p-6 space-y-5 eos-scrollbar">
           {/* Executive Summary */}
-          <div className="p-5 bg-card rounded-xl border border-border">
+          <div className="p-5 bg-secondary/40 rounded-xl border border-border/30">
             <div className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-xl bg-gradient-teal flex items-center justify-center shrink-0 ring-1 ring-primary/20">
-                <Target className="h-5 w-5 text-primary" />
+              <div className="w-9 h-9 rounded-lg bg-teal-500/15 flex items-center justify-center shrink-0">
+                <Target className="h-4 w-4 text-teal-500" />
               </div>
-              <div>
-                <h4 className="text-base font-semibold text-foreground mb-2">Executive Summary</h4>
+              <div className="flex-1 min-w-0">
+                <h4 className="text-sm font-semibold text-foreground mb-2">Executive Summary</h4>
                 <p className="text-sm text-muted-foreground leading-relaxed">{briefing.summary}</p>
               </div>
             </div>
@@ -452,21 +456,35 @@ function BriefingModal({ isOpen, onClose, briefing, providers, globalSyncDisplay
 
           {/* Key Priorities */}
           {briefing.key_priorities && briefing.key_priorities.length > 0 && (
-            <div className="space-y-4">
-              <h4 className="text-base font-semibold text-foreground flex items-center gap-2">
-                <Zap className="h-4 w-4 text-amber-400" /> Key Priorities
+            <div>
+              <h4 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+                <Zap className="h-4 w-4 text-amber-500" />
+                Key Priorities
               </h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2.5">
                 {briefing.key_priorities.map((priority, i) => (
-                  <div key={i} className="p-5 bg-gradient-copper border border-ai-copper/20 rounded-xl">
+                  <div 
+                    key={i} 
+                    className="p-4 rounded-xl border border-border/30 bg-secondary/20 hover:bg-secondary/40 transition-colors"
+                  >
                     <div className="flex items-start gap-3">
-                      <div className={cn('priority-badge shrink-0', i === 0 ? 'priority-badge-1' : i === 1 ? 'priority-badge-2' : 'priority-badge-3')}>
+                      <div className={cn(
+                        'w-6 h-6 rounded-md flex items-center justify-center text-xs font-bold shrink-0',
+                        i === 0 ? 'bg-red-500/15 text-red-500' :
+                        i === 1 ? 'bg-amber-500/15 text-amber-500' :
+                        'bg-emerald-500/15 text-emerald-500'
+                      )}>
                         {i + 1}
                       </div>
-                      <div>
-                        <h5 className="font-semibold text-sm text-foreground mb-1">{priority.title}</h5>
-                        <p className="text-sm text-muted-foreground leading-relaxed">{priority.description}</p>
-                        {priority.source && <p className="text-xs text-muted-foreground/60 mt-2">Source: {priority.source}</p>}
+                      <div className="flex-1 min-w-0">
+                        <h5 className="font-medium text-sm text-foreground">{priority.title}</h5>
+                        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{priority.description}</p>
+                        {priority.source && (
+                          <p className="text-[10px] text-muted-foreground/60 mt-2 flex items-center gap-1">
+                            <FileText className="h-3 w-3" />
+                            {priority.source}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -477,38 +495,59 @@ function BriefingModal({ isOpen, onClose, briefing, providers, globalSyncDisplay
 
           {/* Schedule Overview */}
           {briefing.schedule_summary && (
-            <div className="p-5 bg-card rounded-xl border border-border">
-              <h4 className="text-base font-semibold text-foreground mb-4 flex items-center gap-2">
-                <Calendar className="h-4 w-4 text-sky-400" /> Schedule Overview
+            <div className="p-5 bg-secondary/40 rounded-xl border border-border/30">
+              <h4 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-sky-500" />
+                Schedule Overview
               </h4>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-5 bg-secondary/50 rounded-xl text-center">
-                  <div className="text-3xl font-bold text-foreground">{briefing.schedule_summary?.key_meetings?.length || 0}</div>
-                  <div className="text-sm text-muted-foreground mt-1">Key Meetings</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-4 bg-background/50 rounded-lg border border-border/20 text-center">
+                  <div className="text-2xl font-bold text-foreground">
+                    {briefing.schedule_summary?.key_meetings?.length || 0}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">Key Meetings</div>
                 </div>
-                <div className="p-5 bg-secondary/50 rounded-xl text-center">
-                  <div className={cn('text-3xl font-bold', (briefing.schedule_summary?.conflicts?.length || 0) > 0 ? 'text-status-amber' : 'text-status-green')}>
+                <div className={cn(
+                  'p-4 rounded-lg border text-center',
+                  (briefing.schedule_summary?.conflicts?.length || 0) > 0 
+                    ? 'bg-amber-500/5 border-amber-500/20' 
+                    : 'bg-emerald-500/5 border-emerald-500/20'
+                )}>
+                  <div className={cn(
+                    'text-2xl font-bold',
+                    (briefing.schedule_summary?.conflicts?.length || 0) > 0 ? 'text-amber-500' : 'text-emerald-500'
+                  )}>
                     {briefing.schedule_summary?.conflicts?.length || 0}
                   </div>
-                  <div className="text-sm text-muted-foreground mt-1">Conflicts</div>
+                  <div className="text-xs text-muted-foreground mt-1">Conflicts</div>
                 </div>
               </div>
             </div>
           )}
 
+          {/* Detailed Analysis */}
           {briefing.content && (
-            <div className="p-5 bg-card rounded-xl border border-border">
-              <h4 className="text-base font-semibold text-foreground mb-3">Detailed Analysis</h4>
-              <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap">{briefing.content}</p>
+            <div className="p-5 bg-secondary/40 rounded-xl border border-border/30">
+              <h4 className="text-sm font-semibold text-foreground mb-3">Detailed Analysis</h4>
+              <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">{briefing.content}</p>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="shrink-0 border-t border-border px-6 py-4 flex items-center justify-between bg-card">
-          <p className="text-xs text-muted-foreground">Data: 24h emails · 7 days calendar · 48h documents</p>
-          <Button onClick={onClose} className="font-medium">Close</Button>
-        </div>
+        <div className="shrink-0 border-t border-border/50 px-6 py-4 flex items-center justify-between bg-secondary/20">
+          <p className="text-[10px] text-muted-foreground/60">
+            24h emails · 7 days calendar · 48h documents
+          </p>
+          <Button 
+            onClick={onClose} 
+            variant="secondary"
+            size="sm"
+            className="font-medium px-4"
+          >
+            Close
+          </Button>
+      </div>
       </DialogContent>
     </Dialog>
   );
