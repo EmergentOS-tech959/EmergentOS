@@ -10,7 +10,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
-import { Separator } from '@/components/ui/separator';
 import {
   LayoutDashboard,
   Search,
@@ -22,6 +21,7 @@ import {
   Workflow,
   Lock,
   Settings,
+  Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -33,6 +33,8 @@ interface NavItem {
   action?: () => void;
   badge?: string | number;
   isLocked?: boolean;
+  accentColor: string;
+  activeGradient: string;
 }
 
 interface MobileNavProps {
@@ -45,30 +47,35 @@ export function MobileNav({ isOpen, onClose, onOpenCommandPalette }: MobileNavPr
   const pathname = usePathname();
 
   const handleLockedClick = (label: string) => {
-    toast.info(`${label} is locked in Alpha Phase`, {
-      description: 'This feature will be available in Phase 2.',
-      duration: 3000,
+    toast.info(`${label} — Coming in Phase 2`, {
+      description: 'This feature is not available yet.',
+      duration: 2500,
     });
   };
 
   const navItems: NavItem[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
-    { id: 'search', label: 'Search', icon: Search, action: onOpenCommandPalette },
-    { id: 'inbox', label: 'Unified Inbox', icon: Inbox, href: '/inbox', badge: 'new' },
-    { id: 'resources', label: 'Resources', icon: FolderOpen, href: '/resources' },
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard', accentColor: 'text-teal-400', activeGradient: 'from-teal-500/15 to-teal-500/5' },
+    { id: 'search', label: 'Search', icon: Search, action: onOpenCommandPalette, accentColor: 'text-sky-400', activeGradient: 'from-sky-500/15 to-sky-500/5' },
+    { id: 'inbox', label: 'Unified Inbox', icon: Inbox, href: '/inbox', badge: 'new', accentColor: 'text-violet-400', activeGradient: 'from-violet-500/15 to-violet-500/5' },
+    { id: 'resources', label: 'Resources', icon: FolderOpen, href: '/resources', accentColor: 'text-amber-400', activeGradient: 'from-amber-500/15 to-amber-500/5' },
   ];
 
   const lockedItems: NavItem[] = [
-    { id: 'pulse', label: 'Pulse', icon: Activity, isLocked: true },
-    { id: 'intelligence', label: 'Intelligence', icon: Brain, isLocked: true },
-    { id: 'decisions', label: 'Decisions', icon: GitBranch, isLocked: true },
-    { id: 'workflows', label: 'Workflows', icon: Workflow, isLocked: true },
-    { id: 'vault', label: 'Knowledge Vault', icon: Lock, isLocked: true },
+    { id: 'pulse', label: 'Pulse', icon: Activity, isLocked: true, accentColor: 'text-muted-foreground/50', activeGradient: '' },
+    { id: 'intelligence', label: 'Intelligence', icon: Brain, isLocked: true, accentColor: 'text-muted-foreground/50', activeGradient: '' },
+    { id: 'decisions', label: 'Decisions', icon: GitBranch, isLocked: true, accentColor: 'text-muted-foreground/50', activeGradient: '' },
+    { id: 'workflows', label: 'Workflows', icon: Workflow, isLocked: true, accentColor: 'text-muted-foreground/50', activeGradient: '' },
+    { id: 'vault', label: 'Knowledge Vault', icon: Lock, isLocked: true, accentColor: 'text-muted-foreground/50', activeGradient: '' },
   ];
 
-  const settingsItems: NavItem[] = [
-    { id: 'settings', label: 'Settings', icon: Settings, href: '/settings' },
-  ];
+  const settingsItem: NavItem = { 
+    id: 'settings', 
+    label: 'Settings', 
+    icon: Settings, 
+    href: '/settings', 
+    accentColor: 'text-slate-400',
+    activeGradient: 'from-slate-500/15 to-slate-500/5'
+  };
 
   const renderNavItem = (item: NavItem) => {
     const isActive = item.href ? pathname === item.href : false;
@@ -88,24 +95,59 @@ export function MobileNav({ isOpen, onClose, onOpenCommandPalette }: MobileNavPr
     const content = (
       <div
         className={cn(
-          'flex items-center gap-3 px-4 py-3 rounded-lg transition-colors',
-          'hover:bg-secondary',
-          isActive && 'bg-secondary text-primary',
-          item.isLocked && 'opacity-50'
+          'group relative flex items-center gap-3.5 px-4 py-3 rounded-lg cursor-pointer',
+          'transition-all duration-200 ease-out active:scale-[0.98]',
+          // Active state
+          isActive && !item.isLocked && `bg-gradient-to-r ${item.activeGradient}`,
+          // Hover state  
+          !isActive && !item.isLocked && 'active:bg-white/[0.06]',
+          // Locked state
+          item.isLocked && 'opacity-50 cursor-not-allowed'
         )}
         onClick={!item.href ? handleClick : undefined}
       >
-        <div className="relative">
-          <Icon className={cn('h-5 w-5', isActive && 'text-primary')} />
+        {/* Active indicator bar */}
+        {isActive && !item.isLocked && (
+          <div className={cn(
+            'absolute left-0 top-1/2 -translate-y-1/2 w-[2px] h-5 rounded-r-full',
+            item.accentColor.replace('text-', 'bg-')
+          )} />
+        )}
+        
+        {/* Icon container */}
+        <div className={cn(
+          'relative w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-200',
+          isActive && !item.isLocked && 'bg-white/[0.06]',
+          !isActive && !item.isLocked && 'bg-white/[0.02]'
+        )}>
+          <Icon className={cn(
+            'h-5 w-5 transition-colors duration-200',
+            isActive && !item.isLocked && item.accentColor,
+            !isActive && !item.isLocked && 'text-muted-foreground',
+            item.isLocked && 'text-muted-foreground/50'
+          )} />
+          
+          {/* Lock indicator */}
           {item.isLocked && (
-            <Lock className="h-2.5 w-2.5 absolute -top-1 -right-1 text-muted-foreground" />
+            <div className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-background border border-border/50 flex items-center justify-center">
+              <Lock className="h-2 w-2 text-muted-foreground/60" />
+            </div>
           )}
         </div>
-        <span className={cn('flex-1', isActive && 'font-medium')}>
+        
+        {/* Label */}
+        <span className={cn(
+          'flex-1 text-[15px] font-medium transition-colors duration-200',
+          isActive && !item.isLocked && 'text-foreground',
+          !isActive && !item.isLocked && 'text-muted-foreground',
+          item.isLocked && 'text-muted-foreground/50'
+        )}>
           {item.label}
         </span>
+        
+        {/* Badge */}
         {item.badge && (
-          <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide bg-teal-500/15 text-teal-400 border border-teal-500/20">
             {item.badge}
           </span>
         )}
@@ -125,34 +167,74 @@ export function MobileNav({ isOpen, onClose, onOpenCommandPalette }: MobileNavPr
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
-      <SheetContent side="left" className="w-72 p-0">
-        <SheetHeader className="p-4 border-b border-border">
-          <SheetTitle className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
-              <span className="text-primary-foreground font-bold">E</span>
+      <SheetContent 
+        side="left" 
+        className="w-[300px] p-0 bg-gradient-to-b from-[#0d1117] via-[#0c0f14] to-[#0a0c10] border-r border-white/[0.06]"
+      >
+        {/* Subtle top highlight */}
+        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/[0.08] to-transparent" />
+        
+        <SheetHeader className="relative p-5 border-b border-white/[0.06]">
+          <SheetTitle className="flex items-center gap-3">
+            {/* Logo with glow */}
+            <div className="relative group">
+              <div className={cn(
+                'absolute -inset-0.5 rounded-xl blur-md',
+                'bg-gradient-to-br from-teal-400/40 to-teal-600/40',
+                'opacity-60'
+              )} />
+              <div className={cn(
+                'relative h-10 w-10 rounded-xl',
+                'bg-gradient-to-br from-teal-400 to-teal-600',
+                'flex items-center justify-center',
+                'shadow-lg shadow-teal-500/20'
+              )}>
+                <Sparkles className="h-5 w-5 text-white" />
+              </div>
             </div>
+            
             <div className="flex flex-col">
-              <span className="text-sm font-semibold">EmergentOS</span>
-              <span className="text-[10px] text-muted-foreground font-normal">Phase 1 Alpha</span>
+              <span className="text-[15px] font-semibold text-foreground tracking-tight">
+                EmergentOS
+              </span>
+              <span className="text-[10px] text-teal-400/80 font-medium tracking-wide">
+                Phase 1 Alpha
+              </span>
             </div>
           </SheetTitle>
         </SheetHeader>
 
-        <nav className="p-2 space-y-1">
-          {navItems.map(renderNavItem)}
-          
-          <Separator className="my-3" />
-          
-          <div className="px-4 py-2">
-            <span className="text-xs text-muted-foreground uppercase tracking-wider">
-              Coming Soon
-            </span>
+        <nav className="p-3 overflow-y-auto eos-scrollbar-thin">
+          {/* Main navigation */}
+          <div className="space-y-0.5">
+            {navItems.map(renderNavItem)}
           </div>
-          {lockedItems.map(renderNavItem)}
           
-          <Separator className="my-3" />
+          {/* Separator */}
+          <div className="my-4 mx-3">
+            <div className="h-px bg-gradient-to-r from-transparent via-white/[0.08] to-transparent" />
+          </div>
           
-          {settingsItems.map(renderNavItem)}
+          {/* Locked items section */}
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2 px-4 py-2">
+              <Lock className="h-3 w-3 text-muted-foreground/40" />
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
+                Coming Soon
+              </span>
+            </div>
+            {lockedItems.map(renderNavItem)}
+          </div>
+          
+          {/* Separator */}
+          <div className="my-4 mx-3">
+            <div className="h-px bg-gradient-to-r from-transparent via-white/[0.08] to-transparent" />
+          </div>
+          
+          {/* Settings */}
+          <div className="space-y-0.5">
+            {renderNavItem(settingsItem)}
+          </div>
         </nav>
       </SheetContent>
     </Sheet>

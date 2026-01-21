@@ -1,7 +1,7 @@
 import { inngest } from './inngest';
 import { Nango } from '@nangohq/node';
 import { supabaseAdmin } from './supabase-server';
-import { scanContent } from './nightfall';
+import { scanContentChunked } from './nightfall';
 import { upsertPiiVaultTokens } from './pii-vault';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { generateBriefingForUser, listBriefingUserIds } from './briefing-generator';
@@ -14,6 +14,12 @@ import {
   buildBriefingEmbeddingInputs,
   type SourceType,
 } from './embeddings';
+import {
+  GmailConfig,
+  CalendarConfig,
+  DriveConfig,
+  type SyncResult,
+} from './config/data-scope';
 
 // Initialize Nango client
 const nango = new Nango({ 
@@ -21,6 +27,10 @@ const nango = new Nango({
 });
 
 const supa = supabaseAdmin as unknown as SupabaseClient;
+
+// ============================================================================
+// Types
+// ============================================================================
 
 interface GmailHeader {
   name: string;
@@ -32,6 +42,7 @@ interface ParsedEmail {
   from: string;
   subject: string;
   date: string;
+  snippet: string; // Email preview text from Gmail API
 }
 
 interface ParsedCalendarEvent {
@@ -64,47 +75,253 @@ type GoogleDriveFile = {
   md5Checksum?: string;
 };
 
+// ============================================================================
+// PAGINATION HELPERS - Fetch ALL data, no limits
+// ============================================================================
+
 /**
- * Gmail sync (Phase 0)
+ * Fetch ALL Gmail messages with pagination (no limit)
+ * Loops through all pages using nextPageToken until all messages are fetched
  */
+async function fetchAllGmailMessages(
+  connectionId: string,
+  query: string,
+  pageSize: number = 100
+): Promise<{ id: string }[]> {
+  const allMessages: { id: string }[] = [];
+  let pageToken: string | undefined = undefined;
+  let pageCount = 0;
+
+  do {
+    const response: { data?: { messages?: { id: string }[]; nextPageToken?: string } } = await nango.proxy({
+      connectionId,
+      providerConfigKey: 'google-mail',
+      method: 'GET',
+      endpoint: '/gmail/v1/users/me/messages',
+      params: {
+        maxResults: String(pageSize),
+        q: query,
+        ...(pageToken && { pageToken }),
+      },
+    });
+
+    const messages = response.data?.messages || [];
+    allMessages.push(...messages);
+
+    pageToken = response.data?.nextPageToken;
+    pageCount++;
+
+    console.log(`[Gmail Pagination] Page ${pageCount}: ${messages.length} messages, total: ${allMessages.length}`);
+  } while (pageToken);
+
+  return allMessages;
+}
+
+/**
+ * Fetch ALL Calendar events with pagination (no limit)
+ * Also captures syncToken for future delta syncs
+ */
+async function fetchAllCalendarEvents(
+  connectionId: string,
+  calendarId: string,
+  timeMin: string,
+  timeMax: string,
+  pageSize: number = 100
+): Promise<{ events: GoogleCalendarApiEvent[]; syncToken?: string }> {
+  const allEvents: GoogleCalendarApiEvent[] = [];
+  let pageToken: string | undefined = undefined;
+  let syncToken: string | undefined = undefined;
+  let pageCount = 0;
+
+  do {
+    const response: { data?: { items?: GoogleCalendarApiEvent[]; nextPageToken?: string; nextSyncToken?: string } } = await nango.proxy({
+      connectionId,
+      providerConfigKey: 'google-calendar',
+      method: 'GET',
+      endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
+      params: {
+        maxResults: String(pageSize),
+        timeMin,
+        timeMax,
+        singleEvents: 'true',
+        orderBy: 'startTime',
+        ...(pageToken && { pageToken }),
+      },
+    });
+
+    const items: GoogleCalendarApiEvent[] = response.data?.items || [];
+    allEvents.push(...items);
+
+    pageToken = response.data?.nextPageToken;
+    // Capture syncToken from the last page
+    if (!pageToken) {
+      syncToken = response.data?.nextSyncToken;
+    }
+    pageCount++;
+
+    console.log(`[Calendar Pagination] Page ${pageCount}: ${items.length} events, total: ${allEvents.length}`);
+  } while (pageToken);
+
+  return { events: allEvents, syncToken };
+}
+
+/**
+ * Fetch Calendar events using syncToken for delta sync
+ */
+async function fetchCalendarEventsWithSyncToken(
+  connectionId: string,
+  calendarId: string,
+  existingSyncToken: string
+): Promise<{ events: GoogleCalendarApiEvent[]; newSyncToken?: string; tokenInvalid?: boolean }> {
+  try {
+    const response: { data?: { items?: GoogleCalendarApiEvent[]; nextSyncToken?: string } } = await nango.proxy({
+      connectionId,
+      providerConfigKey: 'google-calendar',
+      method: 'GET',
+      endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
+      params: { syncToken: existingSyncToken },
+    });
+
+    const items: GoogleCalendarApiEvent[] = response.data?.items || [];
+    const newSyncToken = response.data?.nextSyncToken;
+
+    console.log(`[Calendar Delta] syncToken returned ${items.length} changed events`);
+    return { events: items, newSyncToken };
+  } catch (error: unknown) {
+    // Check if syncToken is invalid (410 Gone)
+    const err = error as { response?: { status?: number } };
+    if (err.response?.status === 410) {
+      console.log('[Calendar Delta] syncToken expired (410 Gone), will do full sync');
+      return { events: [], tokenInvalid: true };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Fetch ALL Drive files with pagination (no limit)
+ */
+async function fetchAllDriveFiles(
+  connectionId: string,
+  modifiedSince: string,
+  pageSize: number = 100
+): Promise<GoogleDriveFile[]> {
+  const allFiles: GoogleDriveFile[] = [];
+  let pageToken: string | undefined = undefined;
+  let pageCount = 0;
+
+  do {
+    const response: { data?: { files?: GoogleDriveFile[]; nextPageToken?: string } } = await nango.proxy({
+      connectionId,
+      providerConfigKey: 'google-drive',
+      method: 'GET',
+      endpoint: '/drive/v3/files',
+      params: {
+        pageSize: String(pageSize),
+        q: `modifiedTime > '${modifiedSince}' and trashed = false`,
+        fields: 'files(id,name,mimeType,modifiedTime,webViewLink,parents,md5Checksum),nextPageToken',
+        ...(pageToken && { pageToken }),
+      },
+    });
+
+    const files: GoogleDriveFile[] = response.data?.files || [];
+    allFiles.push(...files);
+
+    pageToken = response.data?.nextPageToken;
+    pageCount++;
+
+    console.log(`[Drive Pagination] Page ${pageCount}: ${files.length} files, total: ${allFiles.length}`);
+  } while (pageToken);
+
+  return allFiles;
+}
+
+// ============================================================================
+// Gmail sync with pagination and delta sync
+// ============================================================================
+
 export const processGmailConnection = inngest.createFunction(
   { id: 'process-gmail-connection', name: 'Process Gmail Connection', retries: 3 },
   { event: 'gmail/connection.established' },
   async ({ event, step }) => {
-    const { userId, connectionId } = event.data as { userId: string; connectionId?: string };
+    const { userId, connectionId, trigger = 'connect' } = event.data as { 
+      userId: string; 
+      connectionId?: string;
+      trigger?: 'connect' | 'manual' | 'auto';
+    };
     const nangoConnectionId = connectionId || userId;
 
     try {
-    await step.run('update-status-fetching', async () => {
+      await step.run('update-status-fetching', async () => {
         const { error } = await supa
-        .from('sync_status')
+          .from('sync_status')
           .upsert(
             {
-          user_id: userId,
-          status: 'fetching',
+              user_id: userId,
+              status: 'fetching',
               current_provider: 'gmail',
-          updated_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
               error_message: null,
             },
             { onConflict: 'user_id' }
           );
         if (error) throw error;
-    });
+      });
 
-    const emails = await step.run('fetch-gmail-emails', async () => {
-        const listResponse = await nango.proxy({
-          connectionId: nangoConnectionId,
-          providerConfigKey: 'google-mail',
-          method: 'GET',
-          endpoint: '/gmail/v1/users/me/messages',
-          params: { maxResults: '5', q: 'in:inbox' },
-        });
+      const syncResult = await step.run('fetch-gmail-emails', async (): Promise<{ emails: ParsedEmail[]; result: SyncResult }> => {
+        // ═══════════════════════════════════════════════════════════════════════
+        // GMAIL SYNC - Determine INITIAL vs DELTA sync based on last_sync_at
+        // ═══════════════════════════════════════════════════════════════════════
+        
+        // Get connection info to determine sync type
+        const { data: conn } = await supa
+          .from('connections')
+          .select('last_sync_at')
+          .eq('user_id', userId)
+          .eq('provider', 'gmail')
+          .maybeSingle();
+        
+        const lastSyncAt = conn?.last_sync_at ? new Date(conn.last_sync_at) : null;
+        const isInitialSync = !lastSyncAt;
+        
+        // Build query based on sync type
+        let query: string;
+        let pageSize: number;
+        
+        if (isInitialSync) {
+          // INITIAL SYNC: Full 7-day window
+          query = GmailConfig.initialSync.getGmailQuery();
+          pageSize = GmailConfig.initialSync.pageSize;
+          console.log(`[Gmail] INITIAL SYNC - Query: ${query}`);
+        } else {
+          // DELTA SYNC: Since last sync
+          query = GmailConfig.deltaSync.getGmailQuery(lastSyncAt);
+          pageSize = GmailConfig.deltaSync.pageSize;
+          console.log(`[Gmail] DELTA SYNC - Query: ${query}, Since: ${lastSyncAt.toISOString()}`);
+        }
+        
+        // Fetch ALL messages with pagination (no limit)
+        const messages = await fetchAllGmailMessages(nangoConnectionId, query, pageSize);
+        
+        console.log(`[Gmail Sync] Total messages fetched: ${messages.length}`);
+        
+        if (messages.length === 0) {
+          return {
+            emails: [],
+            result: {
+              provider: 'gmail',
+              totalFetched: 0,
+              inserted: 0,
+              updated: 0,
+              deleted: 0,
+              dataChanged: false,
+            },
+          };
+        }
 
-        const messages = listResponse.data?.messages || [];
-        if (messages.length === 0) return [];
-
+        // Fetch details for ALL messages
         const emailDetails: ParsedEmail[] = await Promise.all(
-          messages.slice(0, 5).map(async (msg: { id: string }) => {
+          messages.map(async (msg: { id: string }) => {
             const detailResponse = await nango.proxy({
               connectionId: nangoConnectionId,
               providerConfigKey: 'google-mail',
@@ -123,27 +340,45 @@ export const processGmailConnection = inngest.createFunction(
               return header?.value || 'Unknown';
             };
 
+            // Extract snippet (email preview) - Gmail provides this automatically
+            const snippet = responseData?.snippet || '';
+
             return {
               id: msg.id,
               from: getHeader('From'),
               subject: getHeader('Subject'),
               date: getHeader('Date'),
+              snippet: snippet,
             };
           })
         );
 
-        return emailDetails;
-    });
+        console.log(`[Gmail Sync] Processed ${emailDetails.length} email details`);
+        
+        return {
+          emails: emailDetails,
+          result: {
+            provider: 'gmail',
+            totalFetched: emailDetails.length,
+            inserted: emailDetails.length, // Will be refined after upsert
+            updated: 0,
+            deleted: 0,
+            dataChanged: emailDetails.length > 0,
+          },
+        };
+      });
 
-    await step.run('update-status-securing', async () => {
+      const { emails, result: gmailResult } = syncResult;
+
+      await step.run('update-status-securing', async () => {
         const { error } = await supa
-        .from('sync_status')
+          .from('sync_status')
           .upsert(
             {
-          user_id: userId,
-          status: 'securing',
+              user_id: userId,
+              status: 'securing',
               current_provider: 'gmail',
-          updated_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
               error_message: null,
             },
             { onConflict: 'user_id' }
@@ -152,34 +387,62 @@ export const processGmailConnection = inngest.createFunction(
       });
 
       await step.run('nightfall-dlp-scan', async () => {
-        // Scan and tokenize the fields we will store
-        for (const email of emails) {
-          const scanned = await scanContent(`${email.from}\n${email.subject}`);
+        if (emails.length === 0) return;
+
+        // Prepare content for batched scanning: from + subject + snippet for each email
+        const contents = emails.map(email => 
+          `${email.from}\n${email.subject}\n${email.snippet}`
+        );
+
+        // Scan all emails in batches (20 per API call with retry logic)
+        console.log(`[Gmail DLP] Scanning ${emails.length} emails in batches...`);
+        const scanResults = await scanContentChunked(contents, 20);
+
+        // Process results and update emails
+        for (let i = 0; i < emails.length; i++) {
+          const scanned = scanResults[i];
           await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
 
-          // Replace stored fields with tokenized versions
-          const [fromLine, ...subjectLines] = scanned.redacted.split('\n');
-          email.from = fromLine || email.from;
-          email.subject = subjectLines.join('\n') || email.subject;
+          // Parse the redacted content back into from, subject, snippet
+          const [fromLine, subjectLine, ...snippetLines] = scanned.redacted.split('\n');
+          emails[i].from = fromLine || emails[i].from;
+          emails[i].subject = subjectLine || emails[i].subject;
+          emails[i].snippet = snippetLines.join('\n') || emails[i].snippet;
         }
+        console.log(`[Gmail DLP] Scan complete for ${emails.length} emails`);
       });
 
-    await step.run('persist-emails', async () => {
-        const { error: deleteError } = await supa.from('emails').delete().eq('user_id', userId);
-        if (deleteError) console.error('Failed to delete existing emails', deleteError);
+      await step.run('persist-emails', async () => {
+        // For delta sync, we upsert (don't delete existing)
+        // For initial sync on connect, we could clear first but upsert is safer
+        if (emails.length > 0) {
+          const rows = emails.map((email: ParsedEmail) => {
+            // Convert email header date format to ISO format for proper database queries
+            // Email date format: "Tue, 20 Jan 2026 10:37:36 +0100"
+            // Target format: "2026-01-20T09:37:36.000Z" (ISO)
+            let receivedAt: string;
+            try {
+              const parsed = new Date(email.date);
+              receivedAt = isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+            } catch {
+              receivedAt = new Date().toISOString();
+            }
+            
+            return {
+              user_id: userId,
+              message_id: email.id,
+              sender: email.from,
+              subject: email.subject || 'No Subject',
+              snippet: email.snippet || '', // Store email preview
+              received_at: receivedAt,
+              security_verified: true,
+            };
+          });
 
-      if (emails.length > 0) {
-          const rows = emails.map((email: ParsedEmail) => ({
-          user_id: userId,
-          message_id: email.id,
-          sender: email.from,
-          subject: email.subject || 'No Subject',
-          received_at: email.date,
-          security_verified: true,
-        }));
-
-          const { error: insertError } = await supa.from('emails').insert(rows);
-          if (insertError) throw insertError;
+          const { error: upsertError } = await supa
+            .from('emails')
+            .upsert(rows, { onConflict: 'user_id,message_id' });
+          if (upsertError) throw upsertError;
         }
       });
 
@@ -200,7 +463,6 @@ export const processGmailConnection = inngest.createFunction(
       });
 
       await step.run('update-connection-last-sync-gmail', async () => {
-        // Best-effort: reflect successful sync for UI status
         await supa
           .from('connections')
           .update({ last_sync_at: new Date().toISOString(), status: 'connected' })
@@ -218,10 +480,18 @@ export const processGmailConnection = inngest.createFunction(
         }
       });
 
+      // NOTE: Briefing generation is now handled ONLY by sync-manager
+      // This prevents duplicate briefing generation when:
+      // 1. Inngest processes initial data
+      // 2. Client calls onProviderConnected → sync-manager generates briefing
+      // By removing it here, sync-manager is the single source of truth for briefings.
+
       return {
         success: true,
         userId,
         emailsProcessed: emails.length,
+        syncResult: gmailResult,
+        trigger,
         timestamp: new Date().toISOString(),
       };
     } catch (err) {
@@ -246,14 +516,19 @@ export const processGmailConnection = inngest.createFunction(
   }
 );
 
-/**
- * Calendar sync (Phase 1)
- */
+// ============================================================================
+// Calendar sync with pagination, delta sync (syncToken), and change detection
+// ============================================================================
+
 export const syncCalendarEvents = inngest.createFunction(
   { id: 'sync-calendar-events', name: 'Sync Calendar Events', retries: 3 },
   { event: 'calendar/connection.established' },
   async ({ event, step }) => {
-    const { userId, connectionId } = event.data;
+    const { userId, connectionId, trigger = 'connect' } = event.data as {
+      userId: string;
+      connectionId?: string;
+      trigger?: 'connect' | 'manual' | 'auto';
+    };
     const nangoConnectionId = connectionId || userId;
 
     await step.run('update-status-fetching-calendar', async () => {
@@ -271,26 +546,78 @@ export const syncCalendarEvents = inngest.createFunction(
       if (error) throw error;
     });
 
-    const events: ParsedCalendarEvent[] = await step.run('fetch-calendar-events', async () => {
-      const timeMin = new Date().toISOString();
-      const timeMax = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-
-      const response = await nango.proxy({
-        connectionId: nangoConnectionId,
-        providerConfigKey: 'google-calendar',
-        method: 'GET',
-        endpoint: '/calendar/v3/calendars/primary/events',
-        params: {
-          singleEvents: 'true',
-          orderBy: 'startTime',
+    const syncResult = await step.run('fetch-calendar-events', async (): Promise<{ events: ParsedCalendarEvent[]; result: SyncResult; newSyncToken?: string }> => {
+      // ═══════════════════════════════════════════════════════════════════════
+      // CALENDAR SYNC - Uses syncToken for delta sync
+      // ═══════════════════════════════════════════════════════════════════════
+      
+      // Get connection info including syncToken
+      const { data: conn } = await supa
+        .from('connections')
+        .select('last_sync_at, metadata')
+        .eq('user_id', userId)
+        .eq('provider', 'calendar')
+        .maybeSingle();
+      
+      const connMetadata = (conn?.metadata || {}) as { syncToken?: string };
+      const syncToken = connMetadata.syncToken;
+      const isInitialSync = !syncToken;
+      
+      let rawEvents: GoogleCalendarApiEvent[];
+      let newSyncToken: string | undefined;
+      
+      if (isInitialSync) {
+        // INITIAL SYNC: Full time range with pagination
+        const timeRange = CalendarConfig.initialSync.getTimeRange();
+        const timeMin = timeRange.from.toISOString();
+        const timeMax = timeRange.to.toISOString();
+        
+        console.log(`[Calendar] INITIAL SYNC - TimeMin: ${timeMin}, TimeMax: ${timeMax}`);
+        
+        const result = await fetchAllCalendarEvents(
+          nangoConnectionId,
+          'primary',
           timeMin,
           timeMax,
-          maxResults: '50',
-        },
-      });
-
-      const items: GoogleCalendarApiEvent[] = response.data?.items || [];
-      return items.map((item) => {
+          CalendarConfig.initialSync.pageSize
+        );
+        
+        rawEvents = result.events;
+        newSyncToken = result.syncToken;
+        
+      } else {
+        // DELTA SYNC: Use syncToken
+        console.log(`[Calendar] DELTA SYNC with syncToken`);
+        
+        const result = await fetchCalendarEventsWithSyncToken(
+          nangoConnectionId,
+          'primary',
+          syncToken
+        );
+        
+        if (result.tokenInvalid) {
+          // Token expired, do full sync
+          console.log(`[Calendar] syncToken invalid, falling back to full sync`);
+          const timeRange = CalendarConfig.deltaSync.fallbackTimeRange();
+          const result2 = await fetchAllCalendarEvents(
+            nangoConnectionId,
+            'primary',
+            timeRange.from.toISOString(),
+            timeRange.to.toISOString(),
+            CalendarConfig.deltaSync.pageSize
+          );
+          rawEvents = result2.events;
+          newSyncToken = result2.syncToken;
+        } else {
+          rawEvents = result.events;
+          newSyncToken = result.newSyncToken;
+        }
+      }
+      
+      console.log(`[Calendar Sync] Total events fetched: ${rawEvents.length}`);
+      
+      // Parse events
+      const events = rawEvents.map((item) => {
         const start = item.start?.dateTime || item.start?.date || '';
         const end = item.end?.dateTime || item.end?.date || '';
         return {
@@ -303,7 +630,22 @@ export const syncCalendarEvents = inngest.createFunction(
           attendees: item.attendees || [],
         };
       });
+      
+      return {
+        events,
+        result: {
+          provider: 'calendar',
+          totalFetched: events.length,
+          inserted: events.length, // Will be refined based on actual upsert
+          updated: 0,
+          deleted: 0,
+          dataChanged: events.length > 0,
+        },
+        newSyncToken,
+      };
     });
+
+    const { events, result: calendarResult, newSyncToken } = syncResult;
 
     await step.run('update-status-securing-calendar', async () => {
       const { error } = await supa
@@ -321,14 +663,23 @@ export const syncCalendarEvents = inngest.createFunction(
     });
 
     await step.run('nightfall-dlp-scan-calendar', async () => {
-      for (const ev of events) {
-        const scanned = await scanContent(`${ev.title}\n${ev.location || ''}`);
+      if (events.length === 0) return;
+
+      // Prepare content for batched scanning
+      const contents = events.map(ev => `${ev.title}\n${ev.location || ''}`);
+      
+      console.log(`[Calendar DLP] Scanning ${events.length} events in batches...`);
+      const scanResults = await scanContentChunked(contents, 20);
+
+      for (let i = 0; i < events.length; i++) {
+        const scanned = scanResults[i];
         await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
         const [titleLine, ...locLines] = scanned.redacted.split('\n');
-        ev.title = titleLine || ev.title;
+        events[i].title = titleLine || events[i].title;
         const loc = locLines.join('\n').trim();
-        ev.location = loc || ev.location;
+        events[i].location = loc || events[i].location;
       }
+      console.log(`[Calendar DLP] Scan complete for ${events.length} events`);
     });
 
     await step.run('persist-calendar-events', async () => {
@@ -392,8 +743,8 @@ export const syncCalendarEvents = inngest.createFunction(
         .from('sync_status')
         .upsert(
           {
-          user_id: userId,
-          status: 'complete',
+            user_id: userId,
+            status: 'complete',
             current_provider: null,
             updated_at: new Date().toISOString(),
           },
@@ -403,14 +754,30 @@ export const syncCalendarEvents = inngest.createFunction(
     });
 
     await step.run('update-connection-last-sync-calendar', async () => {
+      // Update last_sync_at AND store the new syncToken for delta sync
+      const { data: existingConn } = await supa
+        .from('connections')
+        .select('metadata')
+        .eq('user_id', userId)
+        .eq('provider', 'calendar')
+        .maybeSingle();
+      
+      const existingMetadata = (existingConn?.metadata || {}) as Record<string, unknown>;
+      
       await supa
         .from('connections')
-        .update({ last_sync_at: new Date().toISOString(), status: 'connected' })
+        .update({ 
+          last_sync_at: new Date().toISOString(), 
+          status: 'connected',
+          metadata: newSyncToken 
+            ? { ...existingMetadata, syncToken: newSyncToken }
+            : existingMetadata,
+        })
         .eq('user_id', userId)
         .eq('provider', 'calendar');
     });
 
-    // Emit an event for downstream analysis pipeline (Time Sovereignty)
+    // Emit event for calendar analysis
     await step.run('emit-calendar-events-synced', async () => {
       await inngest.send({
         name: 'calendar/events.synced',
@@ -428,18 +795,24 @@ export const syncCalendarEvents = inngest.createFunction(
       }
     });
 
+    // NOTE: Briefing generation is now handled ONLY by sync-manager
+    // This prevents duplicate briefing generation.
+
     return {
       success: true,
       userId,
       eventsProcessed: events.length,
+      syncResult: calendarResult,
+      trigger,
       timestamp: new Date().toISOString(),
     };
   }
 );
 
-/**
- * Time Sovereignty: analyze calendar (event-triggered)
- */
+// ============================================================================
+// Time Sovereignty: analyze calendar (event-triggered)
+// ============================================================================
+
 export const analyzeCalendar = inngest.createFunction(
   { id: 'analyze-calendar', name: 'Analyze Calendar', retries: 2 },
   { event: 'calendar/events.synced' },
@@ -450,9 +823,10 @@ export const analyzeCalendar = inngest.createFunction(
   }
 );
 
-/**
- * Time Sovereignty: cron fan-out every 30 minutes
- */
+// ============================================================================
+// Time Sovereignty: cron fan-out every 30 minutes
+// ============================================================================
+
 export const analyzeCalendarCron = inngest.createFunction(
   { id: 'analyze-calendar-cron', name: 'Analyze Calendar (Cron)', retries: 1 },
   { cron: '*/30 * * * *' },
@@ -485,14 +859,19 @@ export const analyzeCalendarCron = inngest.createFunction(
   }
 );
 
-/**
- * Drive sync (Phase 1)
- */
+// ============================================================================
+// Drive sync with pagination and delta sync
+// ============================================================================
+
 export const syncDriveDocuments = inngest.createFunction(
   { id: 'sync-drive-documents', name: 'Sync Drive Documents', retries: 3 },
   { event: 'drive/connection.established' },
   async ({ event, step }) => {
-    const { userId, connectionId } = event.data;
+    const { userId, connectionId, trigger = 'connect' } = event.data as {
+      userId: string;
+      connectionId?: string;
+      trigger?: 'connect' | 'manual' | 'auto';
+    };
     const nangoConnectionId = connectionId || userId;
 
     await step.run('update-status-fetching-drive', async () => {
@@ -510,24 +889,59 @@ export const syncDriveDocuments = inngest.createFunction(
       if (error) throw error;
     });
 
-    const files = await step.run('fetch-drive-files', async () => {
-      const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-
-      const response = await nango.proxy({
-        connectionId: nangoConnectionId,
-        providerConfigKey: 'google-drive',
-        method: 'GET',
-        endpoint: '/drive/v3/files',
-        params: {
-          q: `modifiedTime > '${since}' and trashed = false`,
-          pageSize: '50',
-          fields: 'files(id,name,mimeType,modifiedTime,webViewLink,parents,md5Checksum)',
+    const syncResult = await step.run('fetch-drive-files', async (): Promise<{ files: GoogleDriveFile[]; result: SyncResult }> => {
+      // ═══════════════════════════════════════════════════════════════════════
+      // DRIVE SYNC - Determine INITIAL vs DELTA sync based on last_sync_at
+      // ═══════════════════════════════════════════════════════════════════════
+      
+      // Get connection info to determine sync type
+      const { data: conn } = await supa
+        .from('connections')
+        .select('last_sync_at')
+        .eq('user_id', userId)
+        .eq('provider', 'drive')
+        .maybeSingle();
+      
+      const lastSyncAt = conn?.last_sync_at ? new Date(conn.last_sync_at) : null;
+      const isInitialSync = !lastSyncAt;
+      
+      // Build query based on sync type
+      let since: string;
+      let pageSize: number;
+      
+      if (isInitialSync) {
+        // INITIAL SYNC: 14 days back
+        const timeRange = DriveConfig.initialSync.getTimeRange();
+        since = timeRange.from.toISOString();
+        pageSize = DriveConfig.initialSync.pageSize;
+        console.log(`[Drive] INITIAL SYNC - Since: ${since}`);
+      } else {
+        // DELTA SYNC: Since last sync
+        const timeRange = DriveConfig.deltaSync.getTimeRange(lastSyncAt);
+        since = timeRange.from.toISOString();
+        pageSize = DriveConfig.deltaSync.pageSize;
+        console.log(`[Drive] DELTA SYNC - Since: ${since}`);
+      }
+      
+      // Fetch ALL files with pagination (no limit)
+      const files = await fetchAllDriveFiles(nangoConnectionId, since, pageSize);
+      
+      console.log(`[Drive Sync] Total files fetched: ${files.length}`);
+      
+      return {
+        files,
+        result: {
+          provider: 'drive',
+          totalFetched: files.length,
+          inserted: files.length, // Will be refined after upsert
+          updated: 0,
+          deleted: 0,
+          dataChanged: files.length > 0,
         },
-      });
-
-      const items: GoogleDriveFile[] = response.data?.files || [];
-      return items;
+      };
     });
+
+    const { files, result: driveResult } = syncResult;
 
     await step.run('update-status-securing-drive', async () => {
       const { error } = await supa
@@ -537,7 +951,7 @@ export const syncDriveDocuments = inngest.createFunction(
             user_id: userId,
             status: 'securing',
             current_provider: 'drive',
-          updated_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
           },
           { onConflict: 'user_id' }
         );
@@ -545,11 +959,20 @@ export const syncDriveDocuments = inngest.createFunction(
     });
 
     await step.run('nightfall-dlp-scan-drive', async () => {
-      for (const f of files) {
-        const scanned = await scanContent(f.name);
+      if (files.length === 0) return;
+
+      // Prepare content for batched scanning
+      const contents = files.map(f => f.name);
+      
+      console.log(`[Drive DLP] Scanning ${files.length} files in batches...`);
+      const scanResults = await scanContentChunked(contents, 20);
+
+      for (let i = 0; i < files.length; i++) {
+        const scanned = scanResults[i];
         await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
-        f.name = scanned.redacted;
+        files[i].name = scanned.redacted;
       }
+      console.log(`[Drive DLP] Scan complete for ${files.length} files`);
     });
 
     await step.run('persist-drive-documents', async () => {
@@ -606,18 +1029,24 @@ export const syncDriveDocuments = inngest.createFunction(
       }
     });
 
+    // NOTE: Briefing generation is now handled ONLY by sync-manager
+    // This prevents duplicate briefing generation.
+
     return { 
       success: true,
       userId,
       documentsProcessed: files.length,
+      syncResult: driveResult,
+      trigger,
       timestamp: new Date().toISOString(),
     };
   }
 );
 
-/**
- * Strategic Clarity: generate daily briefing (manual trigger)
- */
+// ============================================================================
+// Strategic Clarity: generate daily briefing (manual trigger)
+// ============================================================================
+
 export const generateDailyBriefing = inngest.createFunction(
   { id: 'generate-daily-briefing', name: 'Generate Daily Briefing', retries: 2 },
   { event: 'briefing/generate.requested' },
@@ -639,9 +1068,10 @@ export const generateDailyBriefing = inngest.createFunction(
   }
 );
 
-/**
- * Strategic Clarity: cron fan-out (6 AM UTC)
- */
+// ============================================================================
+// Strategic Clarity: cron fan-out (6 AM UTC)
+// ============================================================================
+
 export const generateDailyBriefingsCron = inngest.createFunction(
   { id: 'generate-daily-briefings-cron', name: 'Generate Daily Briefings (Cron)', retries: 1 },
   { cron: '0 6 * * *' },
@@ -661,9 +1091,10 @@ export const generateDailyBriefingsCron = inngest.createFunction(
   }
 );
 
-/**
- * Background embedding generation (triggered after sync)
- */
+// ============================================================================
+// Background embedding generation (triggered after sync)
+// ============================================================================
+
 export const generateEmbeddingsForUser = inngest.createFunction(
   { id: 'generate-embeddings', name: 'Generate Embeddings', retries: 2 },
   { event: 'embeddings/generate.requested' },
@@ -745,9 +1176,10 @@ export const generateEmbeddingsForUser = inngest.createFunction(
   }
 );
 
-/**
- * Scheduled embedding refresh (every 10 minutes, generates for new items only)
- */
+// ============================================================================
+// Scheduled embedding refresh (every 10 minutes, generates for new items only)
+// ============================================================================
+
 export const generateEmbeddingsCron = inngest.createFunction(
   { id: 'generate-embeddings-cron', name: 'Generate Embeddings (Cron)', retries: 1 },
   { cron: '*/10 * * * *' },

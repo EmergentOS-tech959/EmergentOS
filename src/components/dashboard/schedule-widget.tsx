@@ -10,14 +10,12 @@ import {
   MapPin, 
   AlertTriangle, 
   Video, 
-  RefreshCw,
   Sparkles,
   ExternalLink,
   ChevronRight
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUser } from '@clerk/nextjs';
-import { toast } from 'sonner';
 import Link from 'next/link';
 import { CalendarModal } from './calendar-modal';
 import { SuggestionsModal } from './suggestions-modal';
@@ -52,11 +50,10 @@ export function ScheduleWidget() {
   const [showSuggestionsModal, setShowSuggestionsModal] = useState(false);
 
   // Use centralized sync manager - displayStrings.calendar shows calendar-specific sync time
-  const { providers, syncCalendar, displayStrings } = useSyncManager();
+  // NOTE: Refresh button removed - use unified refresh in dashboard header
+  const { providers, displayStrings } = useSyncManager();
   const calendarProvider = providers.calendar;
   const calendarStatus = calendarProvider.status === 'syncing' ? 'connected' : calendarProvider.status;
-  // CRITICAL: Only show syncing when CALENDAR is syncing, not when other sources sync
-  const isSyncing = calendarProvider.isSyncing;
 
   const fetchEvents = useCallback(async () => {
     if (!user?.id) return;
@@ -82,19 +79,7 @@ export function ScheduleWidget() {
     } catch { /* non-blocking */ }
   }, [user?.id]);
 
-  const handleSync = useCallback(async () => {
-    if (!user?.id || calendarStatus === 'disconnected') return;
-    
-    try {
-      await syncCalendar();
-      // Wait for sync to complete then refetch
-      await new Promise((r) => setTimeout(r, 2000));
-      await Promise.all([fetchEvents(), fetchInsight()]);
-      toast.success('Calendar synced');
-    } catch {
-      toast.error('Sync failed');
-    }
-  }, [user?.id, calendarStatus, syncCalendar, fetchEvents, fetchInsight]);
+  // NOTE: handleSync removed - use unified refresh button in dashboard header
 
   // Initial load
   useEffect(() => {
@@ -167,13 +152,19 @@ export function ScheduleWidget() {
 
   if (isLoading) {
     return (
-      <Card className="p-4 h-full">
-        <div className="flex items-center justify-between mb-3">
-          <Skeleton className="h-7 w-36" />
-          <Skeleton className="h-7 w-7 rounded-full" />
+      <Card className="p-5 h-full">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-10 w-10 rounded-xl" />
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-3 w-20" />
+            </div>
+          </div>
+          <Skeleton className="h-8 w-8 rounded-lg" />
         </div>
-        <div className="space-y-2">
-          {[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}
+        <div className="space-y-2.5">
+          {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 w-full rounded-xl" />)}
         </div>
       </Card>
     );
@@ -181,16 +172,16 @@ export function ScheduleWidget() {
 
   return (
     <>
-      <Card className="p-4 h-full flex flex-col">
+      <Card className="p-5 h-full flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-blue-500/20 flex items-center justify-center">
-              <Calendar className="h-4 w-4 text-blue-400" />
+        <div className="flex items-center justify-between mb-4">
+          <div className="widget-header">
+            <div className="widget-icon bg-gradient-to-br from-sky-500/20 to-blue-500/10 ring-1 ring-sky-500/20">
+              <Calendar className="h-5 w-5 text-sky-400" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">Today&apos;s Schedule</h3>
-              <p className="text-[11px] text-gray-500">
+              <h3 className="widget-title">Today&apos;s Schedule</h3>
+              <p className="widget-subtitle">
                 {calendarStatus === 'connected' 
                   ? `${todayEvents.length} event${todayEvents.length !== 1 ? 's' : ''}`
                   : 'Not connected'}
@@ -198,69 +189,63 @@ export function ScheduleWidget() {
             </div>
           </div>
           
-          <div className="flex items-center gap-1.5">
-            {actualConflictCount > 0 && (
-              <button 
-                onClick={() => setShowSuggestionsModal(true)}
-                className="flex items-center gap-1 text-amber-400 bg-amber-500/15 hover:bg-amber-500/25 px-2 py-1 rounded-md text-xs font-medium transition-colors"
-              >
-                <AlertTriangle className="h-3 w-3" />
-                {actualConflictCount}
-              </button>
-            )}
-            
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleSync}
-              disabled={calendarStatus === 'disconnected' || isSyncing}
-              className="h-7 w-7 p-0"
+          {actualConflictCount > 0 && (
+            <button 
+              onClick={() => setShowSuggestionsModal(true)}
+              className="flex items-center gap-1.5 text-status-amber bg-status-amber/10 hover:bg-status-amber/15 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors border border-status-amber/20"
             >
-              <RefreshCw className={cn('h-3.5 w-3.5', isSyncing && 'animate-spin')} />
-            </Button>
-          </div>
+              <AlertTriangle className="h-3.5 w-3.5" />
+              {actualConflictCount}
+            </button>
+          )}
         </div>
 
         {/* AI Insights Card */}
         {calendarStatus === 'connected' && insight?.suggestions && (
           <button 
             onClick={() => setShowSuggestionsModal(true)}
-            className="mb-3 p-2.5 bg-amber-500/10 hover:bg-amber-500/15 border border-amber-500/20 rounded-lg text-left transition-colors group"
+            className="mb-4 p-3 bg-gradient-copper border border-ai-copper/20 rounded-xl text-left transition-all hover:border-ai-copper/30 group"
           >
             <div className="flex items-center gap-2">
-              <Sparkles className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-              <span className="text-xs font-medium text-amber-400 flex-1">Strategic Insights</span>
-              <ChevronRight className="h-3 w-3 text-gray-500 group-hover:text-amber-400 transition-colors" />
+              <Sparkles className="h-4 w-4 text-ai-copper shrink-0" />
+              <span className="text-xs font-semibold text-ai-copper flex-1">Strategic Insights Available</span>
+              <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-ai-copper transition-colors" />
             </div>
           </button>
         )}
 
         {/* Events List */}
-        <div className="flex-1 overflow-y-auto -mx-1 px-1 min-h-0">
+        <div className="flex-1 overflow-y-auto -mx-1 px-1 min-h-0 eos-scrollbar-thin">
           {calendarStatus === 'disconnected' ? (
-            <div className="flex flex-col items-center justify-center h-full text-center py-4">
-              <Calendar className="h-8 w-8 text-gray-500 mb-2" />
-              <p className="text-sm font-medium text-white mb-1">Not Connected</p>
+            <div className="flex flex-col items-center justify-center h-full text-center py-6">
+              <div className="w-14 h-14 rounded-2xl bg-secondary/50 flex items-center justify-center mb-4">
+                <Calendar className="h-7 w-7 text-muted-foreground/50" />
+              </div>
+              <p className="text-sm font-medium text-foreground mb-1">Calendar Not Connected</p>
+              <p className="text-xs text-muted-foreground mb-4">Connect to see your schedule</p>
               <Link href="/settings">
-                <Button variant="outline" size="sm" className="h-7 text-xs">Connect Calendar</Button>
+                <Button variant="outline" size="sm" className="h-8 text-xs font-medium">Connect Calendar</Button>
               </Link>
             </div>
           ) : calendarStatus === 'error' ? (
-            <div className="flex flex-col items-center justify-center h-full text-center py-4">
-              <AlertTriangle className="h-8 w-8 text-red-400/50 mb-2" />
-              <p className="text-sm font-medium text-red-400 mb-1">Sync Error</p>
-              <Button variant="outline" size="sm" onClick={handleSync} disabled={isSyncing} className="h-7 text-xs">
-                {isSyncing ? 'Retrying...' : 'Retry'}
-              </Button>
+            <div className="flex flex-col items-center justify-center h-full text-center py-6">
+              <div className="w-14 h-14 rounded-2xl bg-destructive/10 flex items-center justify-center mb-4">
+                <AlertTriangle className="h-7 w-7 text-destructive/70" />
+              </div>
+              <p className="text-sm font-medium text-destructive mb-1">Sync Error</p>
+              <p className="text-xs text-muted-foreground mb-4">Failed to sync calendar</p>
+              <p className="text-xs text-muted-foreground">Use the Refresh button above</p>
             </div>
           ) : todayEvents.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-center py-4">
-              <Calendar className="h-8 w-8 text-gray-500 mb-2" />
-              <p className="text-sm font-medium text-white">No Events Today</p>
-              <p className="text-xs text-gray-500">Your schedule is clear</p>
+            <div className="flex flex-col items-center justify-center h-full text-center py-6">
+              <div className="w-14 h-14 rounded-2xl bg-secondary/50 flex items-center justify-center mb-4">
+                <Calendar className="h-7 w-7 text-muted-foreground/50" />
+              </div>
+              <p className="text-sm font-medium text-foreground mb-1">No Events Today</p>
+              <p className="text-xs text-muted-foreground">Your schedule is clear</p>
             </div>
           ) : (
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               {todayEvents.slice(0, 4).map((event) => {
                 const isCurrent = isCurrentEvent(event);
                 return (
@@ -268,25 +253,26 @@ export function ScheduleWidget() {
                     key={event.id}
                     onClick={() => setShowCalendarModal(true)}
                     className={cn(
-                      'w-full p-2.5 rounded-lg text-left transition-all border-l-3',
+                      'w-full p-3.5 rounded-xl text-left transition-all relative overflow-hidden',
+                      'border-l-[3px]',
                       event.has_conflict 
-                        ? 'bg-amber-500/10 border-l-amber-500 hover:bg-amber-500/15' 
+                        ? 'bg-status-amber/5 border-l-status-amber hover:bg-status-amber/10' 
                         : event.status === 'cancelled'
-                          ? 'bg-red-500/10 border-l-red-500/50 opacity-50'
+                          ? 'bg-destructive/5 border-l-destructive/40 opacity-50'
                           : isCurrent
-                            ? 'bg-teal-500/15 border-l-teal-500 hover:bg-teal-500/20'
-                            : 'bg-gray-800/50 border-l-transparent hover:bg-gray-800/80'
+                            ? 'bg-primary/5 border-l-primary hover:bg-primary/10'
+                            : 'bg-secondary/50 border-l-transparent hover:bg-secondary/80 border border-transparent hover:border-border'
                     )}
                   >
-                    <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <p className={cn(
-                          'font-medium text-sm text-white truncate',
+                          'font-medium text-sm text-foreground truncate',
                           event.status === 'cancelled' && 'line-through'
                         )}>
                           {event.title}
                         </p>
-                        <div className="flex items-center gap-2 mt-1 text-[11px] text-gray-400">
+                        <div className="flex items-center gap-3 mt-1.5 text-[11px] text-muted-foreground">
                           <span className="flex items-center gap-1">
                             <Clock className="h-3 w-3" />
                             {formatTime(event.start_time)}
@@ -294,16 +280,16 @@ export function ScheduleWidget() {
                           {event.location && (
                             <span className="flex items-center gap-1 truncate">
                               {event.location.includes('http') ? <Video className="h-3 w-3" /> : <MapPin className="h-3 w-3" />}
-                              <span className="truncate max-w-[60px]">
+                              <span className="truncate max-w-[80px]">
                                 {event.location.includes('http') ? 'Online' : event.location}
                               </span>
                             </span>
                           )}
                         </div>
                       </div>
-                      {event.has_conflict && <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />}
+                      {event.has_conflict && <AlertTriangle className="h-4 w-4 text-status-amber shrink-0" />}
                       {isCurrent && !event.has_conflict && (
-                        <span className="w-2 h-2 rounded-full bg-teal-400 animate-pulse shrink-0 mt-1.5" />
+                        <span className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse shrink-0 mt-1" />
                       )}
                     </div>
                   </button>
@@ -312,7 +298,7 @@ export function ScheduleWidget() {
               {todayEvents.length > 4 && (
                 <button 
                   onClick={() => setShowCalendarModal(true)}
-                  className="w-full py-1.5 text-xs text-gray-400 hover:text-white transition-colors"
+                  className="w-full py-2 text-xs text-muted-foreground hover:text-foreground transition-colors font-medium"
                 >
                   +{todayEvents.length - 4} more events
                 </button>
@@ -322,8 +308,8 @@ export function ScheduleWidget() {
         </div>
 
         {/* Footer - CRITICAL: Show calendar-specific sync time */}
-        <div className="pt-2 mt-2 border-t border-gray-800 flex items-center justify-between">
-          <span className="text-[10px] text-gray-500">
+        <div className="pt-3 mt-3 border-t border-border flex items-center justify-between">
+          <span className="text-[10px] text-muted-foreground">
             {calendarStatus === 'connected' && `Synced ${displayStrings.calendar}`}
           </span>
           
@@ -331,7 +317,7 @@ export function ScheduleWidget() {
             <Button
               variant="ghost"
               size="sm"
-              className="h-6 text-[11px] gap-1 text-gray-400 hover:text-white px-2"
+              className="h-7 text-[11px] gap-1.5 text-muted-foreground hover:text-foreground px-2 font-medium"
               onClick={() => setShowCalendarModal(true)}
             >
               Open Calendar
@@ -347,7 +333,6 @@ export function ScheduleWidget() {
         events={events}
         onEventCreate={handleEventCreate}
         onEventDelete={handleEventDelete}
-        onRefresh={handleSync}
         isConnected={calendarStatus === 'connected'}
         lastSyncDisplay={displayStrings.calendar}
       />

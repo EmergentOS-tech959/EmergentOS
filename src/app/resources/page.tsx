@@ -1,13 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FolderOpen, FileText, RefreshCw, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { FolderOpen, FileText, RefreshCw, CheckCircle2, XCircle, Clock, ExternalLink, File } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useUser } from '@clerk/nextjs';
 import { toast } from 'sonner';
 import { ConnectDrive } from '@/components/ConnectDrive';
 import { useSyncManager } from '@/lib/sync-manager';
+import { cn } from '@/lib/utils';
 
 type DriveDocumentRow = {
   id: string;
@@ -255,38 +256,48 @@ export default function ResourcesPage() {
     void load();
   }, [driveLastSyncAt, initialSyncState, load, user?.id]);
 
+  const getFileIcon = (mimeType: string) => {
+    if (mimeType.includes('document') || mimeType.includes('text')) return FileText;
+    if (mimeType.includes('spreadsheet')) return FileText;
+    if (mimeType.includes('presentation')) return FileText;
+    return File;
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Resources</h1>
-          <p className="text-muted-foreground">
+          <h1 className="text-2xl font-bold text-foreground">Resources</h1>
+          <p className="text-muted-foreground mt-1">
             Your Google Drive context folder
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="hidden md:flex items-center gap-1 text-xs">
+        <div className="flex items-center gap-3">
+          {/* Status Badge */}
+          <div className="hidden md:flex items-center">
             {drivePending ? (
-              <span className="inline-flex items-center gap-1 text-status-amber">
-                <Clock className="h-3 w-3" /> Connecting…
+              <span className="inline-flex items-center gap-1.5 text-xs text-status-amber bg-status-amber/10 px-3 py-1.5 rounded-lg font-medium border border-status-amber/20">
+                <Clock className="h-3.5 w-3.5 animate-spin" /> Connecting…
               </span>
             ) : driveStatus === 'connected' ? (
-              <span className="inline-flex items-center gap-1 text-status-green">
-                <CheckCircle2 className="h-3 w-3" /> Connected
+              <span className="inline-flex items-center gap-1.5 text-xs text-status-green bg-status-green/10 px-3 py-1.5 rounded-lg font-medium border border-status-green/20">
+                <CheckCircle2 className="h-3.5 w-3.5" /> Connected
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 text-muted-foreground">
-                <XCircle className="h-3 w-3" /> Not connected
+              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground bg-secondary/50 px-3 py-1.5 rounded-lg font-medium border border-border">
+                <XCircle className="h-3.5 w-3.5" /> Not connected
               </span>
             )}
           </div>
-          <Button variant="outline" className="gap-2" onClick={syncDrive} disabled={isSyncing}>
-            <RefreshCw className="h-4 w-4" />
+          
+          <Button variant="outline" className="gap-2 font-medium" onClick={syncDrive} disabled={isSyncing}>
+            <RefreshCw className={cn('h-4 w-4', isSyncing && 'animate-spin')} />
             {isSyncing ? 'Syncing…' : 'Sync Drive'}
           </Button>
+          
           {driveStatus === 'connected' ? (
-            <Button variant="outline" onClick={disconnectDrive}>
+            <Button variant="outline" onClick={disconnectDrive} className="font-medium">
               Disconnect
             </Button>
           ) : (
@@ -308,14 +319,22 @@ export default function ResourcesPage() {
       {/* Content */}
       <Card className="p-6">
         {isLoading ? (
-          <div className="text-sm text-muted-foreground">Loading documents…</div>
-        ) : docs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center text-center py-10">
-            <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-              <FolderOpen className="h-8 w-8 text-primary" />
+          <div className="flex items-center justify-center py-12">
+            <div className="flex items-center gap-3 text-muted-foreground">
+              <RefreshCw className="h-5 w-5 animate-spin" />
+              <span>Loading documents…</span>
             </div>
-            <h2 className="text-xl font-semibold mb-2">No documents synced</h2>
-            <p className="text-muted-foreground max-w-md mb-6">
+          </div>
+        ) : docs.length === 0 ? (
+          <div className="flex flex-col items-center justify-center text-center py-16">
+            <div className="relative mb-6">
+              <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/20 to-emerald-600/10 rounded-2xl blur-xl" />
+              <div className="relative h-20 w-20 rounded-2xl bg-gradient-to-br from-emerald-500/15 to-emerald-600/10 flex items-center justify-center ring-1 ring-emerald-500/20">
+                <FolderOpen className="h-10 w-10 text-emerald-400" />
+              </div>
+            </div>
+            <h2 className="text-xl font-bold text-foreground mb-2">No documents synced</h2>
+            <p className="text-muted-foreground max-w-md mb-8 leading-relaxed">
               {driveStatus !== 'connected'
                 ? 'Connect Drive to start your initial sync automatically.'
                 : initialSyncState === 'syncing'
@@ -324,40 +343,49 @@ export default function ResourcesPage() {
                     ? 'Initial sync did not complete. Click Sync Drive to retry.'
                     : 'Sync is automatic after connect. Use Sync Drive to re-sync on demand.'}
             </p>
-            <Button className="gap-2" onClick={syncDrive} disabled={isSyncing}>
+            <Button className="gap-2 font-medium" onClick={syncDrive} disabled={isSyncing}>
               <FileText className="h-4 w-4" />
               {isSyncing ? 'Syncing…' : 'Sync Drive'}
             </Button>
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-8">
             {grouped.map(([folderId, items]) => (
-              <div key={folderId} className="space-y-2">
-                <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <div key={folderId} className="space-y-3">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                  <FolderOpen className="h-4 w-4" />
                   {folderId === 'root' ? 'Root' : foldersById[folderId] || `Folder ${folderId}`}
                 </div>
-                <div className="divide-y divide-border rounded-md border border-border">
-                  {items.map((d) => (
-                    <div key={d.id} className="flex items-center justify-between p-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <FileText className="h-4 w-4 text-muted-foreground" />
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium truncate">{d.name}</div>
-                          <div className="text-xs text-muted-foreground truncate">{d.mime_type}</div>
+                <div className="divide-y divide-border rounded-xl border border-border overflow-hidden">
+                  {items.map((d) => {
+                    const IconComponent = getFileIcon(d.mime_type);
+                    return (
+                      <div key={d.id} className="flex items-center justify-between p-4 hover:bg-secondary/30 transition-colors">
+                        <div className="flex items-center gap-4 min-w-0">
+                          <div className="w-10 h-10 rounded-lg bg-secondary/50 flex items-center justify-center shrink-0">
+                            <IconComponent className="h-5 w-5 text-muted-foreground" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-foreground truncate">{d.name}</div>
+                            <div className="text-xs text-muted-foreground truncate mt-0.5">
+                              {d.mime_type.split('.').pop()?.replace('application/', '')}
+                            </div>
+                          </div>
                         </div>
+                        {d.web_view_link && (
+                          <a
+                            className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 font-medium transition-colors shrink-0"
+                            href={d.web_view_link}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        )}
                       </div>
-                      {d.web_view_link && (
-                        <a
-                          className="text-xs text-primary hover:underline"
-                          href={d.web_view_link}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open
-                        </a>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))}

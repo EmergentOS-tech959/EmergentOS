@@ -4,10 +4,17 @@ import { inngest } from '@/lib/inngest';
 import { generateBriefingForUser } from '@/lib/briefing-generator';
 
 function isNonRetryableConfigError(message: string): boolean {
+  const m = message.toLowerCase();
+  
+  // Rate limit errors ARE retryable (handled by Inngest)
+  if (m.includes('429') || m.includes('rate limit') || m.includes('too many requests')) {
+    return false;
+  }
+  
+  // Config/setup errors are NOT retryable
   return (
     message.startsWith('Missing ') ||
     message.includes('must decode to 32 bytes') ||
-    message.includes('Nightfall scan failed') ||
     message.includes('Missing GEMINI_API_KEY') ||
     message.includes('Missing NIGHTFALL_API_KEY') ||
     message.includes('Missing PII_VAULT_KEY_BASE64')

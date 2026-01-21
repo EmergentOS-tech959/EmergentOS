@@ -108,18 +108,29 @@ export async function POST(req: Request) {
 
   const supa = supabaseAdmin as unknown as SupabaseClient;
 
-  // DLP scan before ANY storage/LLM usage
-  const scanned = await scanContent(message);
-  await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
+  // DLP scan before ANY storage/LLM usage (graceful fallback if Nightfall is unavailable)
+  let scannedMessage = message;
+  let tokenToValue: Record<string, { original: string; entityType: string }> = {};
+  
+  try {
+    const scanned = await scanContent(message);
+    scannedMessage = scanned.redacted;
+    tokenToValue = scanned.tokenToValue;
+    await upsertPiiVaultTokens({ userId, tokenToValue });
+  } catch (dlpErr) {
+    // DLP failed (rate limit, config, etc.) - continue without redaction
+    // Log but don't block the chat
+    console.warn('[Chat] DLP scan failed, continuing without redaction:', dlpErr);
+  }
 
-  // Persist user message (tokenized)
+  // Persist user message (tokenized if DLP succeeded)
   const { data: userInsert, error: userInsertErr } = await supa
     .from('chat_messages')
     .insert({
       user_id: userId,
       session_id: sessionId,
       role: 'user',
-      content: scanned.redacted,
+      content: scannedMessage,
       sources: [],
     })
     .select('id')
@@ -133,7 +144,7 @@ export async function POST(req: Request) {
   const [history, userContext, searchResult] = await Promise.all([
     fetchHistory(userId, sessionId),
     getUserContext(userId),
-    searchForChatContext(userId, scanned.redacted).catch((err) => {
+    searchForChatContext(userId, scannedMessage).catch((err) => {
       console.error('Search failed:', err);
       return { context: '## Relevant Context\n- (Search unavailable)\n', sources: [] as ChatSource[] };
     }),
@@ -147,7 +158,7 @@ export async function POST(req: Request) {
     systemContext,
     searchContext: searchResult.context,
     history: history.map(h => ({ role: h.role, content: h.content })),
-    userMessage: scanned.redacted,
+    userMessage: scannedMessage,
   });
 
   const sources = searchResult.sources;

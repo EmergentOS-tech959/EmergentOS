@@ -1,6 +1,6 @@
 'use client';
 
-import { Mail, Calendar, FileText, RefreshCw, AlertCircle } from 'lucide-react';
+import { Mail, Calendar, FileText, RefreshCw, AlertCircle, Check, Minus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSyncManager, type ProviderKey } from '@/lib/sync-manager';
@@ -12,61 +12,40 @@ interface SourceIndicatorsProps {
 export function SourceIndicators({ isCollapsed }: SourceIndicatorsProps) {
   const { providers, displayStrings, isInitialized } = useSyncManager();
 
-  const getStatusColor = (status: string, isSyncing: boolean) => {
-    if (isSyncing) return 'text-blue-400';
-    switch (status) {
-      case 'connected': return 'text-teal-400';
-      case 'error': return 'text-red-400';
-      default: return 'text-gray-500';
-    }
-  };
-
-  const getStatusDot = (status: string, isSyncing: boolean) => {
-    if (isSyncing) return 'bg-blue-400 animate-pulse';
-    switch (status) {
-      case 'connected': return 'bg-teal-400';
-      case 'error': return 'bg-red-400';
-      default: return 'bg-gray-600';
-    }
-  };
-
   const sources = [
-    { key: 'gmail' as ProviderKey, icon: Mail, label: 'Gmail' },
-    { key: 'calendar' as ProviderKey, icon: Calendar, label: 'Calendar' },
-    { key: 'drive' as ProviderKey, icon: FileText, label: 'Drive' },
+    { key: 'gmail' as ProviderKey, icon: Mail, label: 'Gmail', activeColor: 'text-rose-400', activeBg: 'bg-rose-500/10' },
+    { key: 'calendar' as ProviderKey, icon: Calendar, label: 'Calendar', activeColor: 'text-sky-400', activeBg: 'bg-sky-500/10' },
+    { key: 'drive' as ProviderKey, icon: FileText, label: 'Drive', activeColor: 'text-emerald-400', activeBg: 'bg-emerald-500/10' },
   ];
 
-  // CRITICAL: Show loading state until initialized to prevent "Never synced" flash
+  // Loading state
   if (!isInitialized) {
     return (
       <div className={cn(
-        'border-t border-[#30363d] pt-3 px-2',
-        isCollapsed ? 'pb-2' : 'pb-3'
+        'border-t border-white/[0.06] px-2.5',
+        isCollapsed ? 'py-3' : 'py-4'
       )}>
         {!isCollapsed && (
-          <div className="flex items-center justify-between px-2 mb-2">
-            <span className="text-[10px] uppercase tracking-wider text-gray-500 font-medium">
-              Sources
+          <div className="flex items-center justify-between px-1.5 mb-3">
+            <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
+              Data Sources
             </span>
-            <span className="text-[9px] text-gray-600">Loading...</span>
+            <span className="text-[9px] text-muted-foreground/40 animate-pulse">Loading...</span>
           </div>
         )}
         <div className={cn(
-          'flex gap-1',
-          isCollapsed ? 'flex-col items-center' : 'flex-row justify-around'
+          'flex gap-2',
+          isCollapsed ? 'flex-col items-center' : 'flex-row'
         )}>
-          {sources.map(({ key, icon: Icon, label }) => (
+          {sources.map(({ key, icon: Icon }) => (
             <div
               key={key}
               className={cn(
-                'relative flex items-center justify-center p-1.5 rounded-lg',
-                isCollapsed ? 'w-10 h-10' : 'flex-1'
+                'relative flex items-center justify-center rounded-lg bg-white/[0.02] animate-pulse',
+                isCollapsed ? 'w-10 h-10' : 'flex-1 py-2.5'
               )}
             >
-              <Icon className="h-4 w-4 text-gray-600 animate-pulse" />
-              {!isCollapsed && (
-                <span className="ml-1.5 text-[10px] text-gray-600">{label}</span>
-              )}
+              <Icon className="h-4 w-4 text-muted-foreground/20" />
             </div>
           ))}
         </div>
@@ -76,24 +55,24 @@ export function SourceIndicators({ isCollapsed }: SourceIndicatorsProps) {
 
   return (
     <div className={cn(
-      'border-t border-[#30363d] pt-3 px-2',
-      isCollapsed ? 'pb-2' : 'pb-3'
+      'border-t border-white/[0.06] px-2.5',
+      isCollapsed ? 'py-3' : 'py-4'
     )}>
       {!isCollapsed && (
-        <div className="flex items-center justify-between px-2 mb-2">
-          <span className="text-[10px] uppercase tracking-wider text-gray-500 font-medium">
-            Sources
+        <div className="flex items-center justify-between px-1.5 mb-3">
+          <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 font-semibold">
+            Data Sources
           </span>
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="text-[9px] text-gray-500 cursor-help">
+              <span className="text-[9px] text-muted-foreground/40 cursor-help hover:text-muted-foreground/70 transition-colors">
                 {displayStrings.global}
               </span>
             </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs bg-[#21262d] border-[#30363d]">
-              <div className="flex flex-col gap-0.5">
-                <span className="font-medium text-white">Data Sources</span>
-                <span className="text-gray-400">
+            <TooltipContent side="top" sideOffset={8} className="glass border-border/60 px-3 py-2">
+              <div className="flex flex-col gap-1">
+                <span className="font-medium text-foreground text-sm">Sync Status</span>
+                <span className="text-[10px] text-muted-foreground">
                   {displayStrings.global === 'Never synced' 
                     ? 'Connect a source to get started' 
                     : `Last sync: ${displayStrings.global}`}
@@ -105,50 +84,74 @@ export function SourceIndicators({ isCollapsed }: SourceIndicatorsProps) {
       )}
       
       <div className={cn(
-        'flex gap-1',
-        isCollapsed ? 'flex-col items-center' : 'flex-row justify-around'
+        'flex gap-2',
+        isCollapsed ? 'flex-col items-center' : 'flex-row'
       )}>
-        {sources.map(({ key, icon: Icon, label }) => {
+        {sources.map(({ key, icon: Icon, label, activeColor, activeBg }) => {
           const provider = providers[key];
           const isSyncing = provider.isSyncing;
           const status = provider.status;
+          const isConnected = status === 'connected';
+          const isError = status === 'error';
           
           const content = (
             <div
               className={cn(
-                'relative flex items-center justify-center p-1.5 rounded-lg transition-all',
-                'hover:bg-[#21262d] cursor-default',
-                isCollapsed ? 'w-10 h-10' : 'flex-1'
+                'group relative flex items-center justify-center rounded-lg transition-all duration-200',
+                isCollapsed ? 'w-10 h-10' : 'flex-1 py-2.5 px-2',
+                // Connected state
+                isConnected && activeBg,
+                isConnected && 'hover:brightness-110',
+                // Error state
+                isError && 'bg-red-500/10',
+                // Disconnected state
+                !isConnected && !isError && 'bg-white/[0.02] hover:bg-white/[0.04]',
+                // Syncing animation
+                isSyncing && 'animate-pulse'
               )}
             >
+              {/* Icon with status indicator */}
               <div className="relative">
-                <Icon className={cn('h-4 w-4 transition-colors', getStatusColor(status, isSyncing))} />
-                {/* Status dot */}
-                <span 
-                  className={cn(
-                    'absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full border-2 border-[#0d1117]',
-                    getStatusDot(status, isSyncing)
+                <Icon className={cn(
+                  'h-4 w-4 transition-all duration-200',
+                  isConnected && !isSyncing && activeColor,
+                  isSyncing && 'text-sky-400',
+                  isError && 'text-red-400',
+                  !isConnected && !isError && !isSyncing && 'text-muted-foreground/40',
+                )} />
+                
+                {/* Status badge */}
+                <div className={cn(
+                  'absolute -top-1 -right-1 w-3 h-3 rounded-full flex items-center justify-center',
+                  'border border-[#0d1117] transition-all duration-200',
+                  isConnected && !isSyncing && 'bg-emerald-500',
+                  isSyncing && 'bg-sky-500',
+                  isError && 'bg-red-500',
+                  !isConnected && !isError && !isSyncing && 'bg-muted-foreground/30',
+                )}>
+                  {isSyncing ? (
+                    <RefreshCw className="h-1.5 w-1.5 text-white animate-spin" />
+                  ) : isConnected ? (
+                    <Check className="h-1.5 w-1.5 text-white" strokeWidth={3} />
+                  ) : isError ? (
+                    <AlertCircle className="h-1.5 w-1.5 text-white" />
+                  ) : (
+                    <Minus className="h-1.5 w-1.5 text-white" strokeWidth={3} />
                   )}
-                />
+                </div>
               </div>
               
+              {/* Label */}
               {!isCollapsed && (
                 <span className={cn(
-                  'ml-1.5 text-[10px] transition-colors',
-                  status === 'connected' ? 'text-gray-400' : 'text-gray-600'
+                  'ml-2.5 text-[11px] font-medium transition-colors duration-200',
+                  isConnected && 'text-foreground/80',
+                  isSyncing && 'text-sky-400',
+                  isError && 'text-red-400',
+                  !isConnected && !isError && !isSyncing && 'text-muted-foreground/50',
                 )}>
                   {label}
                 </span>
-              )}
-
-              {/* Syncing overlay */}
-              {isSyncing && (
-                <RefreshCw className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 text-blue-400 animate-spin" />
-              )}
-              
-              {/* Error indicator */}
-              {status === 'error' && !isSyncing && (
-                <AlertCircle className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 text-red-400" />
               )}
             </div>
           );
@@ -158,21 +161,34 @@ export function SourceIndicators({ isCollapsed }: SourceIndicatorsProps) {
               <TooltipTrigger asChild>
                 {content}
               </TooltipTrigger>
-              <TooltipContent side={isCollapsed ? 'right' : 'top'} className="text-xs bg-[#21262d] border-[#30363d]">
-                <div className="flex flex-col gap-0.5">
-                  <span className="font-medium text-white">{label}</span>
-                  <span className={cn(
-                    'text-[10px]',
-                    status === 'connected' ? 'text-teal-400' : 
-                    status === 'error' ? 'text-red-400' : 'text-gray-400'
-                  )}>
-                    {isSyncing ? 'Syncing...' : 
-                     status === 'connected' ? 'Connected' : 
-                     status === 'error' ? 'Error' : 'Not connected'}
-                  </span>
-                  {status === 'connected' && displayStrings[key] && displayStrings[key] !== 'Never synced' && (
-                    <span className="text-[10px] text-gray-400">
-                      Synced {displayStrings[key]}
+              <TooltipContent 
+                side={isCollapsed ? 'right' : 'top'} 
+                sideOffset={isCollapsed ? 10 : 8} 
+                className="glass border-border/60 px-3 py-2"
+              >
+                <div className="flex flex-col gap-1 min-w-[100px]">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-foreground text-sm">{label}</span>
+                    <span className={cn(
+                      'text-[9px] font-medium px-1.5 py-0.5 rounded-full',
+                      isConnected && 'bg-emerald-500/15 text-emerald-400',
+                      isSyncing && 'bg-sky-500/15 text-sky-400',
+                      isError && 'bg-red-500/15 text-red-400',
+                      !isConnected && !isError && !isSyncing && 'bg-muted text-muted-foreground',
+                    )}>
+                      {isSyncing ? 'Syncing' : 
+                       isConnected ? 'Active' : 
+                       isError ? 'Error' : 'Offline'}
+                    </span>
+                  </div>
+                  {isConnected && displayStrings[key] && displayStrings[key] !== 'Never synced' && (
+                    <span className="text-[10px] text-muted-foreground">
+                      Last sync: {displayStrings[key]}
+                    </span>
+                  )}
+                  {!isConnected && !isError && (
+                    <span className="text-[10px] text-muted-foreground">
+                      Connect in Settings
                     </span>
                   )}
                 </div>

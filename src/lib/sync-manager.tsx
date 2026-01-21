@@ -11,6 +11,15 @@ import { toast } from 'sonner';
 export type ProviderKey = 'gmail' | 'calendar' | 'drive';
 export type ConnectionStatus = 'connected' | 'disconnected' | 'error' | 'syncing';
 
+/**
+ * Sync trigger types for change detection
+ * - connect: First-time connection → ALWAYS regenerate briefing
+ * - disconnect: Source removed → ALWAYS regenerate briefing
+ * - manual: User clicked refresh → ALWAYS regenerate briefing
+ * - auto: 10-minute auto-sync → ONLY regenerate if data changed
+ */
+export type SyncTrigger = 'connect' | 'disconnect' | 'manual' | 'auto';
+
 export interface ProviderState {
   status: ConnectionStatus;
   lastSyncAt: string | null;
@@ -20,8 +29,29 @@ export interface ProviderState {
 export interface SyncRequest {
   id: string;
   providers: ProviderKey[];
-  source: 'auto' | 'manual-briefing' | 'manual-schedule' | 'connection';
+  trigger: SyncTrigger;
   timestamp: number;
+  forceRegenerate?: boolean; // Force briefing regeneration regardless of data change
+}
+
+// API response with change detection info
+interface SyncApiResponse {
+  success?: boolean;
+  dataChanged?: boolean;
+  eventsSynced?: number;
+  documentsSynced?: number;
+  emailsProcessed?: number;
+  syncType?: 'initial' | 'delta';
+  warning?: string;
+  error?: string;
+  // Calendar-specific: analysis result
+  analysisResult?: {
+    success: boolean;
+    eventsAnalyzed?: number;
+    conflictsCount?: number;
+    totalIssues?: number;
+    error?: string;
+  };
 }
 
 // CRITICAL: Separate display strings for different contexts
@@ -35,18 +65,18 @@ interface DisplayStrings {
 interface SyncManagerState {
   providers: Record<ProviderKey, ProviderState>;
   globalLastSync: string | null;
-  displayStrings: DisplayStrings; // CRITICAL: Per-context display strings
+  displayStrings: DisplayStrings;
   isAutoSyncEnabled: boolean;
   nextAutoSyncAt: Date | null;
   queueLength: number;
   isSyncing: boolean;
-  isInitialized: boolean; // CRITICAL: True after first fetchConnections completes
+  isInitialized: boolean;
 }
 
 interface SyncManagerContextValue extends SyncManagerState {
-  syncAll: () => Promise<void>;
-  syncCalendar: () => Promise<void>;
-  syncProvider: (provider: ProviderKey) => Promise<void>;
+  syncAll: (options?: { trigger?: SyncTrigger; forceRegenerate?: boolean }) => Promise<void>;
+  syncCalendar: (options?: { trigger?: SyncTrigger }) => Promise<void>;
+  syncProvider: (provider: ProviderKey, options?: { trigger?: SyncTrigger }) => Promise<void>;
   refreshConnections: () => Promise<void>;
   onProviderConnected: (provider: ProviderKey) => Promise<void>;
   onProviderDisconnected: (provider: ProviderKey) => Promise<void>;
@@ -61,7 +91,7 @@ const DEBOUNCE_WINDOW_MS = 2000;
 const DISPLAY_UPDATE_INTERVAL_MS = 30000;
 
 const PROVIDER_SYNC_ENDPOINTS: Record<ProviderKey, string> = {
-  gmail: '/api/trigger-sync',
+  gmail: '/api/integrations/gmail/sync',
   calendar: '/api/integrations/calendar/sync',
   drive: '/api/integrations/drive/sync',
 };
@@ -81,7 +111,6 @@ function computeDisplayTime(iso: string | null): string {
   return new Date(iso).toLocaleDateString();
 }
 
-// CRITICAL: Format time for a provider, respecting connection status
 function computeProviderDisplayTime(
   status: ConnectionStatus, 
   lastSyncAt: string | null
@@ -123,18 +152,12 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
     drive: { status: 'disconnected', lastSyncAt: null, isSyncing: false },
   });
 
-  // Sync timestamps
   const [globalLastSync, setGlobalLastSync] = useState<string | null>(null);
-  const [lastAllSync, setLastAllSync] = useState<string | null>(null); // When ALL connected sources synced
-  
+  const [lastAllSync, setLastAllSync] = useState<string | null>(null);
   const [nextAutoSyncAt, setNextAutoSyncAt] = useState<Date | null>(null);
   const [isAutoSyncEnabled] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
-  
-  // Tick counter for periodic display refresh (increments every 30 seconds)
   const [displayTick, setDisplayTick] = useState(0);
-  
-  // CRITICAL: Track initialization state to prevent UI flicker
   const [isInitialized, setIsInitialized] = useState(false);
 
   // FIFO Queue
@@ -147,36 +170,29 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
     providersRef.current = providers;
   }, [providers]);
 
-  // Helper to update providers AND ref synchronously
   const updateProviders = useCallback((updater: (prev: Record<ProviderKey, ProviderState>) => Record<ProviderKey, ProviderState>) => {
     setProviders((prev) => {
       const next = updater(prev);
-      providersRef.current = next; // CRITICAL: Update ref immediately
+      providersRef.current = next;
       return next;
     });
   }, []);
 
   // -------------------------------------------------------------------------
-  // Compute lastAllSync dynamically based on CURRENTLY connected providers
-  // This ensures it updates correctly when sources connect/disconnect
+  // Compute lastAllSync dynamically
   // -------------------------------------------------------------------------
   const computedLastAllSync = useMemo<string | null>(() => {
     const connectedProviders = (['gmail', 'calendar', 'drive'] as ProviderKey[])
       .filter((p) => providers[p].status === 'connected');
     
-    // If no providers connected, no "all sync" time
     if (connectedProviders.length === 0) return null;
     
-    // Check if ALL connected providers have sync times
     const allHaveSyncTimes = connectedProviders.every((p) => providers[p].lastSyncAt);
     if (!allHaveSyncTimes) return null;
     
-    // Use the OLDEST sync time among connected providers
-    // This represents when all CURRENTLY connected sources were last synced together
     const times = connectedProviders.map((p) => new Date(providers[p].lastSyncAt!).getTime());
     const oldestTime = Math.min(...times);
     
-    // If we have an explicit lastAllSync that is newer, use that instead
     if (lastAllSync && new Date(lastAllSync).getTime() > oldestTime) {
       return lastAllSync;
     }
@@ -185,39 +201,18 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
   }, [providers, lastAllSync]);
 
   // -------------------------------------------------------------------------
-  // Display strings - DERIVED using useMemo (no setState in effect)
-  // Updates when providers, computedLastAllSync, or displayTick changes
-  // CRITICAL: Uses computeProviderDisplayTime for provider-specific strings
-  //           to show "Not connected" for disconnected sources
+  // Display strings
   // -------------------------------------------------------------------------
   const displayStrings = useMemo<DisplayStrings>(() => {
-    const result = {
+    return {
       global: computeDisplayTime(computedLastAllSync),
       gmail: computeProviderDisplayTime(providers.gmail.status, providers.gmail.lastSyncAt),
       calendar: computeProviderDisplayTime(providers.calendar.status, providers.calendar.lastSyncAt),
       drive: computeProviderDisplayTime(providers.drive.status, providers.drive.lastSyncAt),
     };
-    
-    // DEBUG: Log display strings computation
-    console.log('[SyncManager] displayStrings computed:', JSON.stringify({
-      computedLastAllSync,
-      gmailStatus: providers.gmail.status,
-      gmailLastSyncAt: providers.gmail.lastSyncAt,
-      calendarStatus: providers.calendar.status,
-      calendarLastSyncAt: providers.calendar.lastSyncAt,
-      driveStatus: providers.drive.status,
-      driveLastSyncAt: providers.drive.lastSyncAt,
-      result,
-    }, null, 2));
-    
-    return result;
-  },
-    // displayTick triggers re-computation every 30s for relative time refresh
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [providers, computedLastAllSync, displayTick]
-  );
+  }, [providers, computedLastAllSync, displayTick]);
 
-  // Periodic tick every 30 seconds for relative time refresh
   useEffect(() => {
     const interval = setInterval(() => {
       setDisplayTick((t) => t + 1);
@@ -226,43 +221,22 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
   }, []);
 
   // -------------------------------------------------------------------------
-  // Fetch connection statuses from server
+  // Fetch connection statuses
   // -------------------------------------------------------------------------
   
   const fetchConnections = useCallback(async () => {
-    if (!userId) {
-      console.log('[SyncManager] fetchConnections: No userId, skipping');
-      return;
-    }
+    if (!userId) return;
     try {
-      console.log('[SyncManager] fetchConnections: Fetching for userId:', userId);
       const res = await fetch('/api/connections', { cache: 'no-store' });
       const body = await res.json().catch(() => ({}));
       
-      // DEBUG: Log full API response
-      console.log('[SyncManager] fetchConnections response status:', res.status);
-      console.log('[SyncManager] fetchConnections response body:', JSON.stringify(body, null, 2));
-      
-      if (!res.ok) {
-        console.error('[SyncManager] fetchConnections: API returned error', res.status);
-        return;
-      }
-      
-      if (!body.connections) {
-        console.error('[SyncManager] fetchConnections: No connections in response');
-        return;
-      }
+      if (!res.ok || !body.connections) return;
 
       const currentProviders = providersRef.current;
       
-      // CRITICAL: Extract data with explicit logging
       const gmailData = body.connections.gmail;
       const calendarData = body.connections.calendar;
       const driveData = body.connections.drive;
-      
-      console.log('[SyncManager] Gmail data:', JSON.stringify(gmailData));
-      console.log('[SyncManager] Calendar data:', JSON.stringify(calendarData));
-      console.log('[SyncManager] Drive data:', JSON.stringify(driveData));
       
       const newProviders: Record<ProviderKey, ProviderState> = {
         gmail: { 
@@ -281,15 +255,10 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
           isSyncing: currentProviders.drive.isSyncing,
         },
       };
-      
-      console.log('[SyncManager] New providers state:', JSON.stringify(newProviders, null, 2));
 
       updateProviders(() => newProviders);
-      
-      // CRITICAL: Mark as initialized after first successful fetch
       setIsInitialized(true);
 
-      // Update globalLastSync to most recent
       const connectedWithSync = (['gmail', 'calendar', 'drive'] as ProviderKey[])
         .filter((p) => newProviders[p].status === 'connected' && newProviders[p].lastSyncAt);
       
@@ -302,17 +271,12 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
           return new Date(serverMaxTime) >= new Date(currentTime) ? serverMaxTime : currentTime;
         });
         
-        // CRITICAL: Derive lastAllSync from server data on initial load
-        // If ALL connected providers have sync times, use the OLDEST as "last all sync"
-        // This ensures the display shows when all sources were last synced together
         const allConnected = (['gmail', 'calendar', 'drive'] as ProviderKey[])
           .filter((p) => newProviders[p].status === 'connected');
         
         const allHaveSyncTimes = allConnected.every((p) => newProviders[p].lastSyncAt);
         
         if (allHaveSyncTimes && allConnected.length > 0) {
-          // Use the OLDEST sync time among connected providers as "last all sync"
-          // This represents when all sources were last synced together
           const oldestSyncTime = new Date(Math.min(...times)).toISOString();
           setLastAllSync((current) => {
             if (!current) return oldestSyncTime;
@@ -326,7 +290,7 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
   }, [userId, updateProviders]);
 
   // -------------------------------------------------------------------------
-  // FIFO Queue Processing
+  // FIFO Queue Processing with Change Detection
   // -------------------------------------------------------------------------
 
   const processQueue = useCallback(async () => {
@@ -366,28 +330,65 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
         return next;
       });
 
-      // Execute sync
+      // Execute sync and collect results
       const syncPromises = connectedProviders.map(async (provider) => {
         try {
           const endpoint = PROVIDER_SYNC_ENDPOINTS[provider];
           const res = await fetch(endpoint, { method: 'POST' });
-          const body = await res.json().catch(() => ({}));
-          return { provider, success: res.ok, body };
-        } catch {
-          return { provider, success: false, body: null };
+          const body: SyncApiResponse = await res.json().catch(() => ({}));
+          const dataChanged = body.dataChanged ?? (
+            (body.eventsSynced ?? 0) > 0 ||
+            (body.documentsSynced ?? 0) > 0 ||
+            (body.emailsProcessed ?? 0) > 0
+          );
+          
+          // Log individual provider sync result
+          const count = body.eventsSynced ?? body.documentsSynced ?? body.emailsProcessed ?? 0;
+          console.log(`[SyncManager] ${provider} sync: ${body.syncType || 'sync'}, ${count} items, dataChanged: ${dataChanged}`);
+          
+          return { 
+            provider, 
+            success: res.ok, 
+            body,
+            dataChanged,
+          };
+        } catch (err) {
+          console.error(`[SyncManager] ${provider} sync failed:`, err);
+          return { provider, success: false, body: null, dataChanged: false };
         }
       });
 
       const results = await Promise.allSettled(syncPromises);
 
-      // Generate timestamp
       const newSyncTime = new Date().toISOString();
       
-      // Track which providers succeeded
+      // Track which providers succeeded and if any data changed
       const successfulProviders: ProviderKey[] = [];
+      let anyDataChanged = false;
+      let calendarDataChanged = false;
+      
       for (const result of results) {
         if (result.status === 'fulfilled' && result.value.success) {
           successfulProviders.push(result.value.provider);
+          if (result.value.dataChanged) {
+            anyDataChanged = true;
+            if (result.value.provider === 'calendar') {
+              calendarDataChanged = true;
+            }
+          }
+        }
+      }
+      
+      // Log calendar analysis result (runs automatically in calendar sync when data changes)
+      const calendarResult = results.find(r => r.status === 'fulfilled' && r.value.provider === 'calendar');
+      if (calendarResult && calendarResult.status === 'fulfilled' && calendarResult.value.body?.analysisResult) {
+        const analysis = calendarResult.value.body.analysisResult;
+        console.log(`[SyncManager] Calendar analysis result:`, analysis);
+      } else if (successfulProviders.includes('calendar')) {
+        if (calendarDataChanged) {
+          console.log(`[SyncManager] Calendar analysis triggered (data changed)`);
+        } else {
+          console.log(`[SyncManager] Calendar analysis skipped (no new events)`);
         }
       }
       
@@ -407,44 +408,100 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
         return next;
       });
 
-      // Update global sync time
       if (successfulProviders.length > 0) {
         setGlobalLastSync(newSyncTime);
         
-        // CRITICAL: Check if ALL connected providers were synced
         const allConnected = (['gmail', 'calendar', 'drive'] as ProviderKey[])
           .filter((p) => currentProviders[p].status === 'connected');
         
-        // If this was a full sync (all providers requested and succeeded)
         if (request.providers.length === 3 || 
             (allConnected.length > 0 && allConnected.every(p => successfulProviders.includes(p)))) {
           setLastAllSync(newSyncTime);
         }
-        // NOTE: displayStrings is derived via useMemo, auto-updates when providers/lastAllSync change
       }
 
-      // CRITICAL: Trigger briefing regeneration FIRST (before notifying components)
-      // This ensures the briefing is ready when components poll for it
-      if (successfulProviders.length > 0) {
+      // ═══════════════════════════════════════════════════════════════════════
+      // CHANGE DETECTION: Decide whether to regenerate briefing
+      // ═══════════════════════════════════════════════════════════════════════
+      
+      const shouldRegenerateBriefing = (() => {
+        // Force regenerate always wins
+        if (request.forceRegenerate) return true;
+        
+        switch (request.trigger) {
+          case 'connect':
+            return true; // Always - new source connected
+          case 'disconnect':
+            return true; // Always - source removed
+          case 'manual':
+            return true; // Always - user explicitly requested refresh
+          case 'auto':
+            return anyDataChanged; // ONLY if data actually changed
+          default:
+            return true;
+        }
+      })();
+      
+      console.log(`[SyncManager] Trigger: ${request.trigger}, DataChanged: ${anyDataChanged}, RegenerateBriefing: ${shouldRegenerateBriefing}`);
+
+      // Regenerate briefing if needed
+      let briefingSuccess = false;
+      if (successfulProviders.length > 0 && shouldRegenerateBriefing) {
         try {
           console.log(`[SyncManager] Regenerating briefing after sync of: ${successfulProviders.join(', ')}`);
           const res = await fetch('/api/ai/briefing/generate', { method: 'POST' });
-          const data = await res.json().catch(() => ({}));
+          const data = await res.json().catch(() => ({})) as { success?: boolean; error?: string; warning?: string };
           console.log(`[SyncManager] Briefing regeneration result:`, data);
+          
+          if (!res.ok || data.error) {
+            console.error(`[SyncManager] Briefing API error:`, data.error || `HTTP ${res.status}`);
+            // Only show toast for manual triggers (don't spam on auto-sync)
+            if (request.trigger === 'manual') {
+              toast.warning('Briefing may be outdated', {
+                description: 'AI service is busy. Try refreshing again in a moment.',
+              });
+            }
+          } else if (data.warning) {
+            console.warn(`[SyncManager] Briefing warning:`, data.warning);
+            briefingSuccess = true; // Partial success
+          } else {
+            briefingSuccess = true;
+            if (request.trigger === 'manual') {
+              toast.success('Data synced', {
+                description: 'All sources updated and briefing regenerated.',
+              });
+            }
+          }
         } catch (err) {
           console.error(`[SyncManager] Briefing regeneration failed:`, err);
+          if (request.trigger === 'manual') {
+            toast.warning('Sync completed but briefing failed', {
+              description: 'Data synced but briefing could not be regenerated.',
+            });
+          }
+        }
+      } else if (successfulProviders.length > 0) {
+        console.log(`[SyncManager] Skipping briefing regeneration (auto-sync with no data changes)`);
+        briefingSuccess = true; // No regeneration needed counts as success
+        if (request.trigger === 'manual') {
+          toast.success('Data synced', {
+            description: 'All sources up to date.',
+          });
         }
       }
 
-      // NOW notify other components (after briefing is regenerated)
+      // Notify other components
       window.dispatchEvent(
         new CustomEvent('eos:connections-updated', {
           detail: { 
             providers: connectedProviders, 
             phase: 'complete', 
-            source: request.source,
+            trigger: request.trigger,
             syncTime: newSyncTime,
             syncedProviders: successfulProviders,
+            dataChanged: anyDataChanged,
+            briefingRegenerated: shouldRegenerateBriefing,
+            briefingSuccess,
           },
         })
       );
@@ -462,14 +519,14 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
   }, [fetchConnections, updateProviders]);
 
   const enqueueSync = useCallback(
-    (providersToSync: ProviderKey[], source: SyncRequest['source']) => {
+    (providersToSync: ProviderKey[], trigger: SyncTrigger, forceRegenerate?: boolean) => {
       const currentProviders = providersRef.current;
       const connectedProviders = providersToSync.filter(
         (p) => currentProviders[p].status === 'connected'
       );
 
       if (connectedProviders.length === 0) {
-        if (source.startsWith('manual')) {
+        if (trigger === 'manual') {
           toast.warning('No connected sources to sync');
         }
         return;
@@ -478,8 +535,9 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       const request: SyncRequest = {
         id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         providers: connectedProviders,
-        source,
+        trigger,
         timestamp: Date.now(),
+        forceRegenerate,
       };
 
       queueRef.current.push(request);
@@ -493,88 +551,63 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
   // Public Methods
   // -------------------------------------------------------------------------
 
-  const syncAll = useCallback(async () => {
-    enqueueSync(['gmail', 'calendar', 'drive'], 'manual-briefing');
+  const syncAll = useCallback(async (options?: { trigger?: SyncTrigger; forceRegenerate?: boolean }) => {
+    // Default: manual trigger for explicit user action
+    const trigger = options?.trigger ?? 'manual';
+    const forceRegenerate = options?.forceRegenerate ?? (trigger === 'manual');
+    enqueueSync(['gmail', 'calendar', 'drive'], trigger, forceRegenerate);
   }, [enqueueSync]);
 
-  const syncCalendar = useCallback(async () => {
-    // CRITICAL: Only syncs calendar, NOT all sources
-    enqueueSync(['calendar'], 'manual-schedule');
+  const syncCalendar = useCallback(async (options?: { trigger?: SyncTrigger }) => {
+    const trigger = options?.trigger ?? 'manual';
+    enqueueSync(['calendar'], trigger);
   }, [enqueueSync]);
 
   const syncProvider = useCallback(
-    async (provider: ProviderKey) => {
-      enqueueSync([provider], 'manual-briefing');
+    async (provider: ProviderKey, options?: { trigger?: SyncTrigger }) => {
+      const trigger = options?.trigger ?? 'manual';
+      enqueueSync([provider], trigger);
     },
     [enqueueSync]
   );
 
   const onProviderConnected = useCallback(
     async (provider: ProviderKey) => {
-      // CRITICAL: First update local state AND ref to mark provider as connected
-      // This ensures enqueueSync won't filter it out due to race condition
       updateProviders((prev) => ({
         ...prev,
         [provider]: {
           ...prev[provider],
           status: 'connected' as ConnectionStatus,
-          isSyncing: true, // Show syncing immediately
+          isSyncing: true,
         },
       }));
       
-      // Fetch latest from server (will confirm connected status)
       await fetchConnections();
-      
-      // Now enqueue sync - provider is definitely marked as connected in providersRef
-      enqueueSync([provider], 'connection');
+      // Trigger: 'connect' - always regenerates briefing
+      enqueueSync([provider], 'connect');
     },
     [fetchConnections, enqueueSync, updateProviders]
   );
 
-  // CRITICAL: Handle provider disconnection
   const onProviderDisconnected = useCallback(
     async (provider: ProviderKey) => {
-      // Immediately update local state AND ref to reflect disconnection
       updateProviders((prev) => ({
         ...prev,
         [provider]: {
           status: 'disconnected' as ConnectionStatus,
-          lastSyncAt: null, // Clear sync time
+          lastSyncAt: null,
           isSyncing: false,
         },
       }));
       
-      // When a provider disconnects, lastAllSync becomes stale
-      // The computedLastAllSync useMemo will recalculate based on remaining connected providers
-      // But we should clear the explicit lastAllSync so it doesn't override the computed value
       setLastAllSync(null);
-      
-      // Refresh from server to ensure consistency
       await fetchConnections();
       
-      // CRITICAL: Regenerate briefing (the disconnect API already deleted the old briefing)
-      // If regeneration fails (e.g., rate limit), the UI will show "No briefing" which is better than stale data
-      try {
-        console.log(`[SyncManager] Regenerating briefing after ${provider} disconnected...`);
-        const res = await fetch('/api/ai/briefing/generate', { method: 'POST' });
-        const data = await res.json().catch(() => ({}));
-        console.log(`[SyncManager] Briefing regeneration result:`, data);
-        
-        if (!res.ok || data.error || data.warning) {
-          // Rate limit or other error - briefing was deleted but regeneration failed
-          // UI will show "No briefing" which is better than stale data
-          console.warn(`[SyncManager] Briefing regeneration issue: ${data.error || data.warning || 'unknown'}`);
-          toast.info('Briefing is being regenerated...', { 
-            description: 'This may take a moment due to rate limits.' 
-          });
-        }
-      } catch (err) {
-        console.error(`[SyncManager] Briefing regeneration failed:`, err);
-        toast.info('Briefing will be regenerated shortly');
-      }
+      // NOTE: Briefing regeneration is now handled by the disconnect API routes
+      // (gmail/disconnect, calendar/disconnect, drive/disconnect)
+      // This prevents duplicate briefing generation
       
-      // NOW notify other components (e.g., to clear data from that source)
-      // The briefing should be ready by now
+      // Notify other components (widgets listen to this to refetch briefing)
       window.dispatchEvent(
         new CustomEvent('eos:provider-disconnected', {
           detail: { provider },
@@ -615,7 +648,7 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       const msUntilNext = nextSync.getTime() - Date.now();
 
       timeoutId = setTimeout(() => {
-        // Auto-sync syncs ALL providers
+        // Auto-sync uses 'auto' trigger - only regenerates if data changed
         enqueueSync(['gmail', 'calendar', 'drive'], 'auto');
 
         intervalId = setInterval(() => {
@@ -650,7 +683,6 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
     return () => window.removeEventListener('eos:sync-manager-refresh', handler);
   }, [fetchConnections]);
 
-  // Listen for disconnect events from other components (e.g., settings page)
   useEffect(() => {
     const handleDisconnect = (e: Event) => {
       const detail = (e as CustomEvent).detail;

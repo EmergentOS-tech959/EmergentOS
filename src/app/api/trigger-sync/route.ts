@@ -73,6 +73,10 @@ export async function POST() {
       );
 
     // Trigger the Inngest function directly
+    // NOTE: Do NOT set last_sync_at or sync_status here!
+    // The Inngest function will set them AFTER successful data sync.
+    // Setting last_sync_at here causes delta sync to find 0 emails.
+    // Setting sync_status: complete here is a lie - sync hasn't happened yet!
     await inngest.send({
       name: 'gmail/connection.established',
       data: {
@@ -80,40 +84,22 @@ export async function POST() {
         connectionId,
         providerConfigKey: 'google-mail',
         timestamp: new Date().toISOString(),
-        manual: true, // Flag to indicate this was manually triggered
+        trigger: 'manual', // Flag to indicate this was manually triggered
       },
     });
 
-    // CRITICAL: Update last_sync_at immediately for UI consistency
-    // The Inngest function will also update this when it completes,
-    // but we set it now so the frontend has a consistent time immediately
-    const syncTime = new Date().toISOString();
-    await supa
-      .from('connections')
-      .update({ last_sync_at: syncTime, status: 'connected' })
-      .eq('user_id', userId)
-      .eq('provider', 'gmail');
-
-    // Update sync status to complete
-    await supa
-      .from('sync_status')
-      .upsert(
-        {
-          user_id: userId,
-          status: 'complete',
-          current_provider: null,
-          error_message: null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'user_id' }
-      );
-
+    // Return immediately - the Inngest function will:
+    // 1. Fetch emails (initial sync: 7 days, delta sync: since last_sync_at)
+    // 2. Run DLP scan
+    // 3. Store emails in database
+    // 4. Update last_sync_at AFTER successful sync
+    // 5. Update sync_status to 'complete'
     return NextResponse.json({
       success: true,
-      message: 'Sync triggered successfully',
+      message: 'Gmail sync initiated. Data will be available shortly.',
       userId: userId,
       connectionId,
-      timestamp: syncTime,
+      timestamp: new Date().toISOString(),
     });
 
   } catch (error) {

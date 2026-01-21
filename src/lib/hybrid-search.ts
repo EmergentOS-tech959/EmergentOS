@@ -1,32 +1,38 @@
 /**
  * EmergentOS - Hybrid Search (RAG)
- * 
+ *
  * Combines:
  * 1. Semantic search using pgvector similarity
  * 2. Keyword search using PostgreSQL text search
  * 3. Reciprocal Rank Fusion to merge results
+ *
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * SEARCH SCOPE: ALL EMBEDDED DATA (no time restrictions)
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * Search queries ALL data in the embeddings table.
+ * Time restrictions are handled by:
+ * - SYNC: Only syncs data within defined time windows
+ * - CLEANUP: Deletes data older than 30 days
+ *
+ * This means search always has access to the full 30-day retention window.
+ * ═══════════════════════════════════════════════════════════════════════════════
  */
 
 import { supabaseAdmin } from './supabase-server';
 import { generateQueryEmbedding, type SourceType } from './embeddings';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { SearchConfig } from './config/data-scope';
 
 const supa = supabaseAdmin as unknown as SupabaseClient;
 
-// Configuration
+// Configuration - sourced from centralized data-scope.ts
 const SEARCH_CONFIG = {
-  semanticTopK: 10,
-  keywordTopK: 10,
-  finalResultLimit: 8,
-  similarityThreshold: 0.65,
-  rrfConstant: 60, // Reciprocal Rank Fusion constant
-  
-  // Lookback periods (in days)
-  emailLookbackDays: 7,
-  calendarPastDays: 7,
-  calendarFutureDays: 30,
-  driveLookbackDays: 30,
-  briefingLookbackDays: 7,
+  semanticTopK: SearchConfig.semantic.topK,
+  keywordTopK: SearchConfig.keyword.topK,
+  finalResultLimit: SearchConfig.final.limit,
+  similarityThreshold: SearchConfig.semantic.similarityThreshold,
+  rrfConstant: SearchConfig.rrfConstant,
+  chatContextLimit: SearchConfig.chat.contextLimit,
 };
 
 export interface SearchResult {
@@ -365,7 +371,7 @@ export async function searchForChatContext(
 }> {
   const results = await hybridSearch(userId, query, {
     sourceTypes,
-    limit: 8,
+    limit: SEARCH_CONFIG.chatContextLimit,
   });
 
   const enrichedResults = await enrichSearchResults(userId, results);

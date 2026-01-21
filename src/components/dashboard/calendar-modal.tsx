@@ -16,7 +16,6 @@ import {
   FileText,
   Trash2,
   AlertTriangle,
-  RefreshCw,
   CalendarDays
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -41,9 +40,8 @@ interface CalendarModalProps {
   onEventCreate?: (event: Partial<CalendarEvent>) => Promise<void>;
   onEventUpdate?: (id: string, event: Partial<CalendarEvent>) => Promise<void>;
   onEventDelete?: (id: string) => Promise<void>;
-  onRefresh?: () => Promise<void>;
   isConnected: boolean;
-  lastSyncDisplay: string; // CRITICAL: Pre-computed display string for perfect sync
+  lastSyncDisplay: string;
 }
 
 const HOUR_HEIGHT = 56;
@@ -66,7 +64,6 @@ export function CalendarModal({
   events,
   onEventCreate,
   onEventDelete,
-  onRefresh,
   isConnected,
   lastSyncDisplay,
 }: CalendarModalProps) {
@@ -81,7 +78,6 @@ export function CalendarModal({
     description: '',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const isToday = useMemo(() => {
@@ -105,16 +101,6 @@ export function CalendarModal({
   const goToPrevDay = () => setSelectedDate(d => new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1));
   const goToNextDay = () => setSelectedDate(d => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1));
   const goToToday = () => setSelectedDate(new Date());
-
-  const handleSync = useCallback(async () => {
-    if (!onRefresh) return;
-    setIsSyncing(true);
-    try {
-      await onRefresh();
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [onRefresh]);
 
   const openNewEventForm = () => {
     setEditingEvent(null);
@@ -154,7 +140,6 @@ export function CalendarModal({
       
       setShowEventForm(false);
       setEditingEvent(null);
-      onRefresh?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save event');
     } finally {
@@ -170,7 +155,6 @@ export function CalendarModal({
       toast.success('Event deleted');
       setShowEventForm(false);
       setEditingEvent(null);
-      onRefresh?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete event');
     } finally {
@@ -279,10 +263,6 @@ export function CalendarModal({
                   {lastSyncDisplay}
                 </span>
               )}
-              <Button variant="outline" size="sm" onClick={handleSync} disabled={isSyncing} className="gap-2">
-                <RefreshCw className={cn('h-4 w-4', isSyncing && 'animate-spin')} />
-                Sync
-              </Button>
               <Button size="sm" onClick={openNewEventForm} className="gap-2 bg-teal-500 hover:bg-teal-600">
                 <Plus className="h-4 w-4" />
                 New Event

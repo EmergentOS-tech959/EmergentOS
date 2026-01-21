@@ -92,7 +92,9 @@ export async function POST(req: NextRequest) {
           status: 'connected',
           metadata: { clerk_user_id: String(finalUserId) },
           updated_at: now,
-          last_sync_at: now, // CRITICAL: Set initial sync time so UI doesn't show "Never synced"
+          // NOTE: Do NOT set last_sync_at here! 
+          // The Inngest function will set it AFTER successful data sync.
+          // Setting it here causes delta sync to find 0 emails (since no emails after "now").
         };
 
         const connectionsClient = supabaseAdmin as SupabaseClient<Database>;

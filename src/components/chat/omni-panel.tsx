@@ -39,9 +39,9 @@ interface OmniPanelProps {
 }
 
 const QUICK_ACTIONS = [
-  { icon: Mail, label: 'Summarize emails', query: 'Summarize my recent important emails', color: 'text-rose-400', bg: 'bg-rose-500/10' },
-  { icon: Calendar, label: 'Today\'s schedule', query: 'What\'s on my schedule today?', color: 'text-sky-400', bg: 'bg-sky-500/10' },
-  { icon: FileText, label: 'Recent documents', query: 'What documents have I recently worked on?', color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
+  { icon: Mail, label: 'Summarize emails', query: 'Summarize my recent important emails', color: 'text-rose-400', bg: 'bg-rose-500/10', border: 'border-rose-500/20' },
+  { icon: Calendar, label: 'Today\'s schedule', query: 'What\'s on my schedule today?', color: 'text-sky-400', bg: 'bg-sky-500/10', border: 'border-sky-500/20' },
+  { icon: FileText, label: 'Recent documents', query: 'What documents have I recently worked on?', color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' },
 ];
 
 export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
@@ -207,19 +207,22 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
     <div className="fixed bottom-5 right-5 z-50 flex flex-col items-end w-[680px] max-w-[calc(100vw-40px)]">
       {/* Expanded Chat Area */}
       <div className={cn(
-        'w-full bg-[#0d1117] border border-[#21262d] rounded-2xl shadow-2xl overflow-hidden transition-all duration-200',
+        'w-full glass border border-border rounded-2xl shadow-2xl overflow-hidden transition-all duration-300',
         isExpanded ? 'opacity-100' : 'opacity-0 h-0 pointer-events-none'
       )} style={{ maxHeight: isExpanded ? 'calc(80vh - 70px)' : '0px' }}>
         
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-[#21262d] bg-[#161b22]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-card/50">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center">
-              <Sparkles className="h-4 w-4 text-white" />
+            <div className="relative">
+              <div className="absolute inset-0 bg-gradient-to-br from-amber-500 to-orange-600 rounded-xl blur-md opacity-40" />
+              <div className="relative w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center">
+                <Sparkles className="h-5 w-5 text-white" />
+              </div>
             </div>
             <div>
-              <h2 className="font-medium text-white text-sm">EmergentOS Assistant</h2>
-              <p className="text-[11px] text-gray-500">AI-powered assistant</p>
+              <h2 className="font-semibold text-foreground text-sm">EmergentOS Assistant</h2>
+              <p className="text-[11px] text-muted-foreground">AI-powered strategic assistant</p>
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -227,7 +230,7 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
               variant="ghost"
               size="sm"
               onClick={startNewChat}
-              className="h-8 px-3 text-xs text-gray-400 hover:text-white hover:bg-[#21262d] rounded-lg"
+              className="h-8 px-3 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg font-medium"
             >
               <Plus className="h-3.5 w-3.5 mr-1.5" />
               New
@@ -236,7 +239,7 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
               variant="ghost"
               size="sm"
               onClick={() => setIsExpanded(false)}
-              className="h-8 w-8 p-0 text-gray-400 hover:text-white hover:bg-[#21262d] rounded-lg"
+              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg"
             >
               <Minimize2 className="h-4 w-4" />
             </Button>
@@ -244,15 +247,18 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
         </div>
 
         {/* Messages Area */}
-        <div className="h-[420px] overflow-y-auto px-4 py-4">
+        <div className="h-[420px] overflow-y-auto px-5 py-5 eos-scrollbar">
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center px-6">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/10 flex items-center justify-center mb-4 border border-amber-500/20">
-                <Bot className="h-7 w-7 text-amber-500" />
+              <div className="relative mb-5">
+                <div className="absolute inset-0 bg-gradient-to-br from-amber-500/20 to-orange-500/10 rounded-2xl blur-xl" />
+                <div className="relative w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500/15 to-orange-500/10 flex items-center justify-center border border-amber-500/20">
+                  <Bot className="h-8 w-8 text-amber-400" />
+                </div>
               </div>
               
-              <h3 className="text-lg font-semibold text-white mb-1">How can I help you?</h3>
-              <p className="text-xs text-gray-500 mb-6">
+              <h3 className="text-lg font-semibold text-foreground mb-1">How can I help you?</h3>
+              <p className="text-xs text-muted-foreground mb-6">
                 Ask about your emails, calendar, or documents.
               </p>
               
@@ -262,39 +268,43 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
                   <button
                     key={action.label}
                     onClick={() => void sendMessage(action.query)}
-                    className="flex items-center gap-2 px-3 py-2 text-xs text-gray-300 bg-[#161b22] hover:bg-[#21262d] border border-[#30363d] rounded-lg transition-colors"
+                    className={cn(
+                      'flex items-center gap-2 px-3.5 py-2.5 text-xs text-foreground/80 rounded-xl transition-all',
+                      action.bg, 'border', action.border,
+                      'hover:bg-secondary/80 hover:border-border'
+                    )}
                   >
-                    <action.icon className={cn('h-3.5 w-3.5', action.color)} />
-                    <span>{action.label}</span>
+                    <action.icon className={cn('h-4 w-4', action.color)} />
+                    <span className="font-medium">{action.label}</span>
                   </button>
                 ))}
               </div>
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-5">
               {messages.map((msg) => (
                 <div key={msg.id} className={cn('flex gap-3', msg.role === 'user' && 'flex-row-reverse')}>
                   <div className={cn(
-                    'h-7 w-7 rounded-lg flex items-center justify-center shrink-0',
+                    'h-8 w-8 rounded-xl flex items-center justify-center shrink-0',
                     msg.role === 'user' 
-                      ? 'bg-teal-600' 
+                      ? 'bg-gradient-to-br from-primary to-teal-600' 
                       : 'bg-gradient-to-br from-amber-500 to-orange-600'
                   )}>
-                    {msg.role === 'user' ? <User className="h-3.5 w-3.5 text-white" /> : <Bot className="h-3.5 w-3.5 text-white" />}
+                    {msg.role === 'user' ? <User className="h-4 w-4 text-white" /> : <Bot className="h-4 w-4 text-white" />}
                   </div>
                   <div className={cn(
-                    'max-w-[85%] rounded-xl px-3.5 py-2.5',
+                    'max-w-[85%] rounded-2xl px-4 py-3',
                     msg.role === 'user' 
-                      ? 'bg-teal-600 text-white' 
-                      : 'bg-[#161b22] border border-[#30363d] text-gray-200'
+                      ? 'bg-gradient-to-br from-primary to-teal-600 text-white' 
+                      : 'bg-card border border-border text-foreground'
                   )}>
                     <p className={cn('text-[13px] leading-relaxed whitespace-pre-wrap', msg.isStreaming && 'animate-pulse')}>
                       {msg.content || '…'}
                     </p>
                     {msg.sources && msg.sources.length > 0 && (
-                      <div className="mt-2 pt-2 border-t border-[#30363d] flex flex-wrap gap-1">
+                      <div className="mt-3 pt-3 border-t border-border/50 flex flex-wrap gap-1.5">
                         {msg.sources.map((s, i) => (
-                          <span key={i} className="text-[10px] px-2 py-0.5 rounded bg-[#21262d] text-gray-400">
+                          <span key={i} className="text-[10px] px-2 py-1 rounded-md bg-secondary/50 text-muted-foreground font-medium">
                             {s.title || s.kind}
                           </span>
                         ))}
@@ -305,17 +315,17 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
               ))}
               {isThinking && messages[messages.length - 1]?.role !== 'assistant' && (
                 <div className="flex gap-3">
-                  <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center">
-                    <Bot className="h-3.5 w-3.5 text-white" />
+                  <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center">
+                    <Bot className="h-4 w-4 text-white" />
                   </div>
-                  <div className="bg-[#161b22] border border-[#30363d] rounded-xl px-3.5 py-2.5">
-                    <div className="flex items-center gap-2">
+                  <div className="bg-card border border-border rounded-2xl px-4 py-3">
+                    <div className="flex items-center gap-2.5">
                       <div className="flex gap-1">
-                        <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                        <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                        <span className="w-1.5 h-1.5 bg-red-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                        <span className="w-2 h-2 bg-amber-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                        <span className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                        <span className="w-2 h-2 bg-rose-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                       </div>
-                      <span className="text-xs text-gray-500">Thinking</span>
+                      <span className="text-xs text-muted-foreground font-medium">Thinking</span>
                     </div>
                   </div>
                 </div>
@@ -326,15 +336,15 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
         </div>
 
         {/* Input Area in Expanded View */}
-        <div className="px-4 py-3 border-t border-[#21262d] bg-[#161b22]">
-          <div className="flex items-end gap-3 bg-[#0d1117] border border-[#30363d] rounded-xl px-3 py-2.5 focus-within:border-amber-500/50 transition-colors">
+        <div className="px-5 py-4 border-t border-border bg-card/50">
+          <div className="flex items-end gap-3 bg-background border border-border rounded-xl px-4 py-3 focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/10 transition-all">
             <textarea
               ref={expandedInputRef}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Ask anything..."
-              className="flex-1 bg-transparent text-white text-sm placeholder-gray-500 focus:outline-none resize-none min-h-[24px] max-h-[100px]"
+              className="flex-1 bg-transparent text-foreground text-sm placeholder-muted-foreground focus:outline-none resize-none min-h-[24px] max-h-[100px]"
               rows={1}
               disabled={isThinking}
             />
@@ -352,12 +362,15 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
 
       {/* Collapsed Input Bar - Same width as expanded */}
       <div className={cn(
-        'w-full flex items-center gap-2.5 bg-[#0d1117] border border-[#21262d] rounded-xl shadow-xl p-2.5',
+        'w-full flex items-center gap-3 glass border border-border rounded-xl shadow-xl p-3',
         isExpanded && 'mt-3'
       )}>
         {/* Avatar */}
-        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shrink-0">
-          <Sparkles className="h-4 w-4 text-white" />
+        <div className="relative shrink-0">
+          <div className="absolute inset-0 bg-gradient-to-br from-amber-500 to-orange-600 rounded-xl blur-sm opacity-50" />
+          <div className="relative w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center">
+            <Sparkles className="h-5 w-5 text-white" />
+          </div>
         </div>
         
         {/* Input */}
@@ -367,7 +380,7 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Ask EmergentOS..."
-          className="flex-1 min-w-0 bg-transparent text-white text-sm placeholder-gray-500 focus:outline-none"
+          className="flex-1 min-w-0 bg-transparent text-foreground text-sm placeholder-muted-foreground focus:outline-none"
           disabled={isThinking}
         />
         
@@ -376,7 +389,7 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
           size="sm"
           onClick={() => void sendMessage(inputValue)}
           disabled={isThinking || !inputValue.trim()}
-          className="h-9 w-9 p-0 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 disabled:opacity-40 shrink-0"
+          className="h-10 w-10 p-0 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 disabled:opacity-40 shrink-0"
         >
           {isThinking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
         </Button>
@@ -386,7 +399,7 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
           variant="ghost"
           size="sm"
           onClick={() => setIsExpanded(!isExpanded)}
-          className="h-9 w-9 p-0 rounded-lg text-gray-400 hover:text-white hover:bg-[#21262d] shrink-0"
+          className="h-10 w-10 p-0 rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary shrink-0"
         >
           <ChevronUp className={cn('h-4 w-4 transition-transform', isExpanded && 'rotate-180')} />
         </Button>
@@ -396,7 +409,7 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
           variant="ghost"
           size="sm"
           onClick={onClose}
-          className="h-9 w-9 p-0 rounded-lg text-gray-400 hover:text-white hover:bg-[#21262d] shrink-0"
+          className="h-10 w-10 p-0 rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary shrink-0"
         >
           <X className="h-4 w-4" />
         </Button>
@@ -410,9 +423,12 @@ export function OmniPanelButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="fixed bottom-5 right-5 z-50 w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg shadow-orange-500/20 hover:shadow-orange-500/40 hover:scale-105 transition-all"
+      className="fixed bottom-5 right-5 z-50 group"
     >
-      <MessageSquare className="h-5 w-5 text-white" />
+      <div className="absolute inset-0 bg-gradient-to-br from-amber-500 to-orange-600 rounded-xl blur-lg opacity-50 group-hover:opacity-70 transition-opacity" />
+      <div className="relative w-14 h-14 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-xl group-hover:scale-105 transition-transform">
+        <MessageSquare className="h-6 w-6 text-white" />
+      </div>
     </button>
   );
 }

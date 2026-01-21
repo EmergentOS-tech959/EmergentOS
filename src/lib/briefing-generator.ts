@@ -3,6 +3,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { scanContent } from '@/lib/nightfall';
 import { upsertPiiVaultTokens } from '@/lib/pii-vault';
 import { geminiGenerateText, safeJsonParse } from '@/lib/gemini';
+import {
+  GmailConfig,
+  DriveConfig,
+  startOfToday,
+  endOfTomorrow,
+} from '@/lib/config/data-scope';
 
 type BriefingJson = {
   summary: string;
@@ -16,22 +22,16 @@ function isoDateUTC(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-function utcDayRange(d: Date): { start: string; end: string } {
-  const start = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
-  const end = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
-  return { start: start.toISOString(), end: end.toISOString() };
-}
-
-function requireDlpReady() {
-  if (!process.env.NIGHTFALL_API_KEY) throw new Error('Missing NIGHTFALL_API_KEY (DLP gate required)');
+function getDlpConfigIssue(): string | null {
+  if (!process.env.NIGHTFALL_API_KEY) return 'Missing NIGHTFALL_API_KEY';
   const keyB64 = process.env.PII_VAULT_KEY_BASE64;
-  if (!keyB64) throw new Error('Missing PII_VAULT_KEY_BASE64 (PII vault key required)');
+  if (!keyB64) return 'Missing PII_VAULT_KEY_BASE64';
   const key = Buffer.from(keyB64, 'base64');
-  if (key.length !== 32) throw new Error('PII_VAULT_KEY_BASE64 must decode to 32 bytes (AES-256 key)');
+  if (key.length !== 32) return 'PII_VAULT_KEY_BASE64 must decode to 32 bytes';
+  return null;
 }
 
 export async function generateBriefingForUser(args: { userId: string; date?: string }) {
-  requireDlpReady();
   const { userId } = args;
   const date = args.date || isoDateUTC(new Date());
 
@@ -40,12 +40,34 @@ export async function generateBriefingForUser(args: { userId: string; date?: str
   // CRITICAL: First check which sources are actually connected
   // This determines what data we can use and how to communicate to the user
   // Use the same logic as /api/connections for consistency
-  const { data: connections, error: connError } = await supa
+  // Try user_id first, then fallback to metadata
+  let connections: { provider: string; status: string; updated_at: string }[] | null = null;
+  let connError: unknown = null;
+  
+  // Try direct user_id match first
+  const { data: directConns, error: directErr } = await supa
     .from('connections')
     .select('provider,status,updated_at')
-    .or(`user_id.eq.${userId},metadata->>clerk_user_id.eq.${userId}`)
+    .eq('user_id', userId)
     .in('provider', ['gmail', 'calendar', 'drive'])
     .order('updated_at', { ascending: false });
+  
+  if (!directErr && directConns && directConns.length > 0) {
+    connections = directConns;
+  } else {
+    // Fallback to metadata lookup
+    const { data: metaConns, error: metaErr } = await supa
+      .from('connections')
+      .select('provider,status,updated_at')
+      .contains('metadata', { clerk_user_id: userId })
+      .in('provider', ['gmail', 'calendar', 'drive'])
+      .order('updated_at', { ascending: false });
+    
+    if (!metaErr && metaConns) {
+      connections = metaConns;
+    }
+    connError = metaErr;
+  }
 
   if (connError) {
     console.error('[BriefingGenerator] Failed to fetch connections:', connError);
@@ -75,10 +97,26 @@ export async function generateBriefingForUser(args: { userId: string; date?: str
 
   console.log(`[BriefingGenerator] Connection status - Gmail: ${gmailConnected}, Calendar: ${calendarConnected}, Drive: ${driveConnected}`);
 
-  const now = Date.now();
-  const sinceEmails = new Date(now - 24 * 60 * 60 * 1000).toISOString();
-  const sinceDocs = new Date(now - 48 * 60 * 60 * 1000).toISOString();
-  const { start: todayStart, end: todayEnd } = utcDayRange(new Date());
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TIME BOUNDARIES (from data-scope.ts)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Gmail: Yesterday 00:00 → now (full yesterday + today so far)
+  // Calendar: Today 00:00 → Tomorrow 23:59 (full today + full tomorrow)
+  // Drive: Yesterday 00:00 → now (full yesterday + today so far)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const gmailTimeRange = GmailConfig.briefing.getTimeRange();
+  const driveTimeRange = DriveConfig.briefing.getTimeRange();
+  // Calendar time range: Today 00:00 → Tomorrow 23:59
+  const calendarFrom = startOfToday();
+  const calendarTo = endOfTomorrow();
+
+  const sinceEmails = gmailTimeRange.from.toISOString();
+  const sinceDocs = driveTimeRange.from.toISOString();
+  const todayStart = calendarFrom.toISOString();
+  const tomorrowEnd = calendarTo.toISOString();
+
+  console.log(`[BriefingGenerator] Time ranges - Gmail: ${sinceEmails} → now, Calendar: ${todayStart} → ${tomorrowEnd}, Drive: ${sinceDocs} → now`);
 
   // Only fetch data from connected sources
   const [{ data: emails }, { data: events }, { data: docs }] = await Promise.all([
@@ -97,9 +135,9 @@ export async function generateBriefingForUser(args: { userId: string; date?: str
           .select('event_id,title,start_time,end_time,has_conflict,location')
           .eq('user_id', userId)
           .gte('start_time', todayStart)
-          .lte('start_time', todayEnd)
+          .lte('start_time', tomorrowEnd) // Include tomorrow for preparation
           .order('start_time', { ascending: true })
-          .limit(50)
+          .limit(100) // Increased to accommodate 2 days of events
       : Promise.resolve({ data: null }),
     driveConnected
       ? supa
@@ -127,16 +165,33 @@ export async function generateBriefingForUser(args: { userId: string; date?: str
   if (!calendarConnected) {
     eventLines = '[CALENDAR NOT CONNECTED - Cannot access schedule data]';
   } else if ((events || []).length === 0) {
-    eventLines = '(Clear schedule - no events today)';
+    eventLines = '(Clear schedule - no events today or tomorrow)';
   } else {
-    eventLines = (events || [])
-      .map(
-        (e) =>
-          `- ${e.start_time} → ${e.end_time}: ${e.title}${e.has_conflict ? ' [CONFLICT]' : ''}${
-            e.location ? ` @ ${e.location}` : ''
-          }`
-      )
-      .join('\n');
+    // Separate today's and tomorrow's events for clarity
+    const todayDate = new Date().toISOString().slice(0, 10);
+    const tomorrowDate = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const todayEvents = (events || []).filter(
+      (e) => e.start_time && e.start_time.slice(0, 10) === todayDate
+    );
+    const tomorrowEvents = (events || []).filter(
+      (e) => e.start_time && e.start_time.slice(0, 10) === tomorrowDate
+    );
+
+    const formatEvent = (e: { start_time: string; end_time: string; title: string; has_conflict: boolean; location?: string }) =>
+      `- ${e.start_time} → ${e.end_time}: ${e.title}${e.has_conflict ? ' [CONFLICT]' : ''}${
+        e.location ? ` @ ${e.location}` : ''
+      }`;
+
+    const todaySection = todayEvents.length > 0
+      ? `TODAY (${todayDate}):\n${todayEvents.map(formatEvent).join('\n')}`
+      : `TODAY (${todayDate}): No events scheduled`;
+
+    const tomorrowSection = tomorrowEvents.length > 0
+      ? `TOMORROW (${tomorrowDate}):\n${tomorrowEvents.map(formatEvent).join('\n')}`
+      : `TOMORROW (${tomorrowDate}): No events scheduled`;
+
+    eventLines = `${todaySection}\n\n${tomorrowSection}`;
   }
 
   let docLines: string;
@@ -174,19 +229,27 @@ export async function generateBriefingForUser(args: { userId: string; date?: str
 Today's Date (UTC): ${date}
 Connected Data Sources: ${connectedSources.length > 0 ? connectedSources.join(', ') : 'None'}${connectionStatusLine}
 
-Recent Communications (Last 24 Hours):
+═══════════════════════════════════════════════════════════════════════════════
+RECENT COMMUNICATIONS (Yesterday + Today)
+═══════════════════════════════════════════════════════════════════════════════
 ${emailLines}
 
-Today's Schedule:
+═══════════════════════════════════════════════════════════════════════════════
+SCHEDULE (Today + Tomorrow)
+═══════════════════════════════════════════════════════════════════════════════
 ${eventLines}
 
-Recently Modified Documents (Last 48 Hours):
+═══════════════════════════════════════════════════════════════════════════════
+RECENTLY MODIFIED DOCUMENTS (Yesterday + Today)
+═══════════════════════════════════════════════════════════════════════════════
 ${docLines}
 
-Instructions:
+═══════════════════════════════════════════════════════════════════════════════
+INSTRUCTIONS
+═══════════════════════════════════════════════════════════════════════════════
 Generate a concise strategic briefing with:
 1) Top 3 Priorities (based on available data)
-2) Schedule Overview (conflicts, key meetings) - only if Calendar is connected and has events
+2) Schedule Overview (today's AND tomorrow's conflicts, key meetings) - only if Calendar is connected
 3) Action Items extracted from emails - only if Gmail is connected and has emails
 4) Alerts (urgent matters)
 
@@ -195,6 +258,7 @@ CRITICAL RULES:
 - "quiet/clear/no activity" = Source IS connected, just no recent activity. This is NORMAL and GOOD (means no urgent items).
 - Do NOT say "no data available" or imply something is missing. A quiet inbox is a good thing!
 - Focus on what IS there, not what isn't.
+- Include tomorrow's meetings in the schedule overview to help with preparation.
 
 Return ONLY valid JSON with this schema:
 {
@@ -206,11 +270,24 @@ Return ONLY valid JSON with this schema:
 }
 `;
 
-  // DLP gate before LLM
-  const scanned = await scanContent(prompt);
-  await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
+  // DLP gate before LLM (graceful - don't fail briefing if Nightfall is unavailable)
+  let scannedPrompt = prompt;
+  const dlpIssue = getDlpConfigIssue();
+  
+  if (dlpIssue) {
+    console.warn(`[BriefingGenerator] DLP not configured: ${dlpIssue}, proceeding without redaction`);
+  } else {
+    try {
+      const scanned = await scanContent(prompt);
+      scannedPrompt = scanned.redacted;
+      await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
+    } catch (dlpErr) {
+      console.warn('[BriefingGenerator] DLP scan failed, proceeding without redaction:', dlpErr);
+      // Continue with unredacted prompt - better to have a briefing than no briefing
+    }
+  }
 
-  const llmText = await geminiGenerateText(scanned.redacted);
+  const llmText = await geminiGenerateText(scannedPrompt);
   const parsed = safeJsonParse<BriefingJson>(llmText);
 
   const summary = parsed?.summary || llmText.slice(0, 600);

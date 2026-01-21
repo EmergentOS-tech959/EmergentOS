@@ -1,7 +1,7 @@
 'use client';
 
 import { UserButton } from '@clerk/nextjs';
-import { Search, Menu } from 'lucide-react';
+import { Search, Menu, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -17,8 +17,9 @@ export function Header({
   return (
     <header
       className={cn(
-        'sticky top-0 z-30 h-14 border-b border-[#30363d] bg-[#0d1117]/95 backdrop-blur supports-[backdrop-filter]:bg-[#0d1117]/80',
-        'flex items-center justify-between px-4 gap-4',
+        'sticky top-0 z-30 h-16 border-b border-border',
+        'bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60',
+        'flex items-center justify-between px-4 md:px-6 gap-4',
         'transition-all duration-300'
       )}
     >
@@ -28,28 +29,29 @@ export function Header({
         <Button
           variant="ghost"
           size="icon"
-          className="md:hidden h-9 w-9 text-gray-400 hover:text-white hover:bg-[#21262d]"
+          className="md:hidden h-10 w-10 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-xl transition-all duration-200"
           onClick={onOpenMobileNav}
         >
           <Menu className="h-5 w-5" />
           <span className="sr-only">Open menu</span>
         </Button>
 
-        {/* Search Button */}
+        {/* Search Button - Desktop */}
         <Button
           variant="outline"
           className={cn(
-            'hidden sm:flex items-center gap-2.5 text-gray-500',
-            'h-10 px-4 w-80 justify-start',
-            'bg-[#161b22] border-[#30363d] hover:border-[#484f58] hover:bg-[#21262d]',
-            'rounded-xl transition-all'
+            'hidden sm:flex items-center gap-3 text-muted-foreground',
+            'h-11 px-4 w-80 justify-start',
+            'bg-secondary/50 border-border hover:border-primary/30 hover:bg-secondary',
+            'rounded-xl transition-all duration-200',
+            'focus-glow'
           )}
           onClick={onOpenCommandPalette}
         >
-          <Search className="h-4 w-4" />
-          <span className="text-sm text-gray-500">Search...</span>
-          <kbd className="ml-auto flex h-5 items-center gap-1 rounded-md border border-[#30363d] bg-[#21262d] px-1.5 font-mono text-[10px] font-medium text-gray-500">
-            <span className="text-[9px]">⌘</span>K
+          <Search className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm text-muted-foreground">Search anything...</span>
+          <kbd className="ml-auto flex h-6 items-center gap-1 rounded-md border border-border bg-background/50 px-2 font-mono text-[10px] font-medium text-muted-foreground">
+            <span className="text-[10px]">⌘</span>K
           </kbd>
         </Button>
 
@@ -57,7 +59,7 @@ export function Header({
         <Button
           variant="ghost"
           size="icon"
-          className="sm:hidden h-9 w-9 text-gray-400 hover:text-white hover:bg-[#21262d]"
+          className="sm:hidden h-10 w-10 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-xl transition-all duration-200"
           onClick={onOpenCommandPalette}
         >
           <Search className="h-5 w-5" />
@@ -67,15 +69,27 @@ export function Header({
 
       {/* Right Section */}
       <div className="flex items-center gap-3">
+        {/* AI Assistant Badge - Hidden on mobile */}
+        <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gradient-copper border border-ai-copper/20">
+          <Sparkles className="h-3.5 w-3.5 text-ai-copper" />
+          <span className="text-[11px] font-medium text-ai-copper">AI Ready</span>
+        </div>
+        
         {/* User Button */}
-        <UserButton
-          afterSignOutUrl="/"
-          appearance={{
-            elements: {
-              avatarBox: 'h-9 w-9 ring-2 ring-[#30363d] hover:ring-teal-500/50 transition-all',
-            },
-          }}
-        />
+        <div className="relative">
+          <UserButton
+            afterSignOutUrl="/"
+            appearance={{
+              elements: {
+                avatarBox: cn(
+                  'h-10 w-10',
+                  'ring-2 ring-border hover:ring-primary/50',
+                  'transition-all duration-200'
+                ),
+              },
+            }}
+          />
+        </div>
       </div>
     </header>
   );

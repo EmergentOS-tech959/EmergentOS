@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { 
@@ -48,6 +48,22 @@ interface ParsedSuggestions {
 }
 
 export function SuggestionsModal({ isOpen, onClose, insight }: SuggestionsModalProps) {
+  // REAL-TIME TIMESTAMP: Tick state forces re-render every minute for live updates
+  const [timeTick, setTimeTick] = useState(0);
+  const tickIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  
+  useEffect(() => {
+    // Only run interval when modal is open
+    if (isOpen) {
+      tickIntervalRef.current = setInterval(() => {
+        setTimeTick((t) => t + 1);
+      }, 60000);
+    }
+    return () => {
+      if (tickIntervalRef.current) clearInterval(tickIntervalRef.current);
+    };
+  }, [isOpen]);
+
   const parsed = useMemo<ParsedSuggestions | null>(() => {
     if (!insight?.suggestions) return null;
     try {
@@ -64,6 +80,8 @@ export function SuggestionsModal({ isOpen, onClose, insight }: SuggestionsModalP
   }, [insight?.suggestions]);
 
   const generatedTimeDisplay = useMemo(() => {
+    // timeTick dependency ensures this re-computes every minute
+    void timeTick;
     if (!insight?.generated_at) return null;
     const d = new Date(insight.generated_at);
     const now = new Date();
@@ -72,7 +90,7 @@ export function SuggestionsModal({ isOpen, onClose, insight }: SuggestionsModalP
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
     return d.toLocaleDateString();
-  }, [insight?.generated_at]);
+  }, [insight?.generated_at, timeTick]);
 
   const score = parsed?.score ?? 75;
   const scoreColor = score >= 80 ? 'text-green-500' : score >= 60 ? 'text-amber-500' : 'text-red-500';

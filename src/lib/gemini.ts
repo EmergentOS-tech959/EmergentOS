@@ -36,6 +36,15 @@ function isModelNotFoundOrUnsupported(message: string): boolean {
   );
 }
 
+function isRateLimitError(message: string): boolean {
+  const m = message.toLowerCase();
+  return m.includes('429') || m.includes('rate limit') || m.includes('resource exhausted') || m.includes('too many requests');
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function uniqueNonEmpty(list: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -66,22 +75,38 @@ export async function geminiGenerateText(prompt: string): Promise<string> {
     'gemini-1.0-pro',
   ]);
 
+  const MAX_RETRIES = 3;
+  const BASE_DELAY_MS = 2000;
+
   let lastError: unknown = null;
   for (const candidate of modelsToTry) {
-    try {
-      const m = client.getGenerativeModel({ model: candidate });
-      const res = await m.generateContent(prompt);
-      return res.response.text();
-    } catch (err) {
-      lastError = err;
-      const message =
-        err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err);
-      if (isModelNotFoundOrUnsupported(message)) {
-        // Try next candidate
-        continue;
+    // Retry loop for rate limits
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const m = client.getGenerativeModel({ model: candidate });
+        const res = await m.generateContent(prompt);
+        return res.response.text();
+      } catch (err) {
+        lastError = err;
+        const message =
+          err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err);
+        
+        if (isModelNotFoundOrUnsupported(message)) {
+          // Try next model candidate (don't retry this model)
+          break;
+        }
+        
+        if (isRateLimitError(message) && attempt < MAX_RETRIES) {
+          // Exponential backoff for rate limits
+          const delayMs = BASE_DELAY_MS * Math.pow(2, attempt);
+          console.warn(`[Gemini] Rate limit hit (attempt ${attempt + 1}/${MAX_RETRIES + 1}), waiting ${delayMs}ms...`);
+          await sleep(delayMs);
+          continue;
+        }
+        
+        // Non-recoverable error: surface immediately (auth, permanent quota, network, etc.)
+        throw err;
       }
-      // Non-model-related error: surface immediately (auth, quota, network, etc.)
-      throw err;
     }
   }
 

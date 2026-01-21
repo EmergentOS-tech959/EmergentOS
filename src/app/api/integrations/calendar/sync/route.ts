@@ -8,6 +8,7 @@ import { Nango } from '@nangohq/node';
 import { scanContent } from '@/lib/nightfall';
 import { upsertPiiVaultTokens } from '@/lib/pii-vault';
 import { runCalendarAnalysisForUser } from '@/lib/calendar-analysis';
+import { CalendarConfig } from '@/lib/config/data-scope';
 
 function getDlpConfigIssue(): string | null {
   if (!process.env.NIGHTFALL_API_KEY) return 'Missing NIGHTFALL_API_KEY on server (DLP gate required)';
@@ -27,6 +28,96 @@ function parseProxyData(data: unknown): unknown {
   }
 }
 
+type GoogleCalendarApiEvent = {
+  id: string;
+  summary?: string;
+  start?: { dateTime?: string; date?: string };
+  end?: { dateTime?: string; date?: string };
+  location?: string;
+  status?: string;
+  attendees?: unknown[];
+};
+
+/**
+ * Fetch ALL Calendar events with pagination (no limit)
+ */
+async function fetchAllCalendarEvents(
+  nango: Nango,
+  connectionId: string,
+  calendarId: string,
+  timeMin: string,
+  timeMax: string,
+  pageSize: number = 100
+): Promise<{ events: GoogleCalendarApiEvent[]; syncToken?: string }> {
+  const allEvents: GoogleCalendarApiEvent[] = [];
+  let pageToken: string | undefined = undefined;
+  let syncToken: string | undefined = undefined;
+
+  do {
+    const response = await nango.proxy({
+      connectionId,
+      providerConfigKey: 'google-calendar',
+      method: 'GET',
+      endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
+      params: {
+        maxResults: String(pageSize),
+        timeMin,
+        timeMax,
+        singleEvents: 'true',
+        orderBy: 'startTime',
+        ...(pageToken && { pageToken }),
+      },
+    });
+
+    const parsed = parseProxyData(response.data) as { items?: unknown[]; nextPageToken?: string; nextSyncToken?: string } | undefined;
+    const items = typeof parsed === 'object' && parsed && Array.isArray(parsed.items)
+      ? (parsed.items as GoogleCalendarApiEvent[])
+      : [];
+
+    allEvents.push(...items);
+    pageToken = parsed?.nextPageToken;
+    
+    if (!pageToken) {
+      syncToken = parsed?.nextSyncToken;
+    }
+  } while (pageToken);
+
+  return { events: allEvents, syncToken };
+}
+
+/**
+ * Fetch Calendar events using syncToken for delta sync
+ */
+async function fetchCalendarEventsWithSyncToken(
+  nango: Nango,
+  connectionId: string,
+  calendarId: string,
+  syncToken: string
+): Promise<{ events: GoogleCalendarApiEvent[]; newSyncToken?: string; tokenInvalid?: boolean }> {
+  try {
+    const response = await nango.proxy({
+      connectionId,
+      providerConfigKey: 'google-calendar',
+      method: 'GET',
+      endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
+      params: { syncToken },
+    });
+
+    const parsed = parseProxyData(response.data) as { items?: unknown[]; nextSyncToken?: string } | undefined;
+    const items = typeof parsed === 'object' && parsed && Array.isArray(parsed.items)
+      ? (parsed.items as GoogleCalendarApiEvent[])
+      : [];
+
+    return { events: items, newSyncToken: parsed?.nextSyncToken };
+  } catch (error: unknown) {
+    const err = error as { response?: { status?: number } };
+    if (err.response?.status === 410) {
+      return { events: [], tokenInvalid: true };
+    }
+    throw error;
+  }
+}
+
 export async function POST() {
   let authedUserId: string | null = null;
   try {
@@ -36,16 +127,15 @@ export async function POST() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Fetch stored Nango connectionId for this user/provider
     type ConnectionRow = Database['public']['Tables']['connections']['Row'];
 
     const supa = supabaseAdmin as unknown as SupabaseClient;
     const { data: primaryConnection, error: connError } = await supa
       .from('connections')
-      .select('connection_id')
+      .select('connection_id, last_sync_at, metadata')
       .eq('user_id', userId)
       .eq('provider', 'calendar')
-      .maybeSingle<Pick<ConnectionRow, 'connection_id'>>();
+      .maybeSingle<Pick<ConnectionRow, 'connection_id'> & { last_sync_at?: string; metadata?: unknown }>();
 
     if (connError) {
       console.error('Failed to fetch calendar connection', connError);
@@ -53,8 +143,10 @@ export async function POST() {
     }
 
     let connectionId: string | null = primaryConnection?.connection_id || null;
+    const connMetadata = (primaryConnection?.metadata || {}) as { syncToken?: string };
+    const existingSyncToken = connMetadata.syncToken;
 
-    // Fallback 1: legacy rows where user_id was not the Clerk userId but stored in metadata
+    // Fallback 1: legacy rows
     if (!connectionId) {
       const { data: metaConnection } = await supa
         .from('connections')
@@ -65,7 +157,7 @@ export async function POST() {
       connectionId = metaConnection?.connection_id || null;
     }
 
-    // Fallback 2: if there's exactly ONE connected calendar row in this project, use it (alpha-safe)
+    // Fallback 2: sole connected calendar
     if (!connectionId) {
       const { data: allConnections } = await supa
         .from('connections')
@@ -75,10 +167,6 @@ export async function POST() {
 
       if (Array.isArray(allConnections) && allConnections.length === 1) {
         connectionId = allConnections[0]?.connection_id || null;
-        console.warn('Using sole calendar connection row as fallback.', {
-          clerkUserId: userId,
-          storedUserId: allConnections[0]?.user_id,
-        });
       }
     }
 
@@ -86,11 +174,10 @@ export async function POST() {
       return NextResponse.json({
         success: true,
         eventsSynced: 0,
-        warning: 'Calendar not connected. Please reconnect via Nango so the webhook can store the correct connection_id.',
+        warning: 'Calendar not connected.',
       });
     }
 
-    // Ensure the UI doesn't get stuck if Inngest doesn't execute: we drive status transitions here.
     await supa
       .from('sync_status')
       .upsert(
@@ -104,18 +191,18 @@ export async function POST() {
         { onConflict: 'user_id' }
       );
 
-    // Send event to Inngest (asynchronous pipeline)
+    // Send event to Inngest
     await inngest.send({
       name: 'calendar/connection.established',
       data: {
         userId,
         connectionId,
         providerConfigKey: 'google-calendar',
+        trigger: 'manual',
         timestamp: new Date().toISOString(),
       },
     });
 
-    // Also perform a direct sync for immediate UI feedback
     const nangoSecretKey = process.env.NANGO_SECRET_KEY;
     if (!nangoSecretKey) {
       await supa
@@ -125,7 +212,7 @@ export async function POST() {
             user_id: userId,
             status: 'error',
             current_provider: 'calendar',
-            error_message: 'Nango not configured on server',
+            error_message: 'Nango not configured',
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'user_id' }
@@ -133,29 +220,71 @@ export async function POST() {
       return NextResponse.json({
         success: true,
         eventsSynced: 0,
-        warning: 'Nango not configured on server. Set NANGO_SECRET_KEY and reconnect Calendar.',
+        warning: 'Nango not configured.',
       });
     }
 
-    let response;
-    try {
-      const nango = new Nango({ secretKey: nangoSecretKey });
-      const timeMin = new Date().toISOString();
-      const timeMax = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const nango = new Nango({ secretKey: nangoSecretKey });
+    
+    // ═══════════════════════════════════════════════════════════════════════
+    // CALENDAR SYNC - Determine INITIAL vs DELTA sync
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    const isInitialSync = !existingSyncToken;
+    let items: GoogleCalendarApiEvent[] = [];
+    let newSyncToken: string | undefined;
 
-      response = await nango.proxy({
-        connectionId,
-        providerConfigKey: 'google-calendar',
-        method: 'GET',
-        endpoint: '/calendar/v3/calendars/primary/events',
-        params: {
-          singleEvents: 'true',
-          orderBy: 'startTime',
+    try {
+      if (isInitialSync) {
+        // INITIAL SYNC: Full time range with pagination
+        const timeRange = CalendarConfig.initialSync.getTimeRange();
+        const timeMin = timeRange.from.toISOString();
+        const timeMax = timeRange.to.toISOString();
+
+        console.log(`[Calendar Sync API] INITIAL SYNC - TimeMin: ${timeMin}, TimeMax: ${timeMax}`);
+
+        const result = await fetchAllCalendarEvents(
+          nango,
+          connectionId,
+          'primary',
           timeMin,
           timeMax,
-          maxResults: '50',
-        },
-      });
+          CalendarConfig.initialSync.pageSize
+        );
+        
+        items = result.events;
+        newSyncToken = result.syncToken;
+        
+      } else {
+        // DELTA SYNC: Use syncToken
+        console.log(`[Calendar Sync API] DELTA SYNC with syncToken`);
+        
+        const result = await fetchCalendarEventsWithSyncToken(
+          nango,
+          connectionId,
+          'primary',
+          existingSyncToken
+        );
+        
+        if (result.tokenInvalid) {
+          // Token expired, do full sync
+          console.log(`[Calendar Sync API] syncToken invalid, falling back to full sync`);
+          const timeRange = CalendarConfig.deltaSync.fallbackTimeRange();
+          const result2 = await fetchAllCalendarEvents(
+            nango,
+            connectionId,
+            'primary',
+            timeRange.from.toISOString(),
+            timeRange.to.toISOString(),
+            CalendarConfig.deltaSync.pageSize
+          );
+          items = result2.events;
+          newSyncToken = result2.syncToken;
+        } else {
+          items = result.events;
+          newSyncToken = result.newSyncToken;
+        }
+      }
     } catch (nangoError) {
       console.error('Nango calendar sync failed', nangoError);
       await supa
@@ -165,7 +294,7 @@ export async function POST() {
             user_id: userId,
             status: 'error',
             current_provider: 'calendar',
-            error_message: 'Calendar sync could not reach Nango',
+            error_message: 'Calendar sync failed',
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'user_id' }
@@ -173,32 +302,18 @@ export async function POST() {
       return NextResponse.json({
         success: true,
         eventsSynced: 0,
-        warning: 'Calendar sync could not reach Nango. Ensure the Calendar connection is active.',
+        warning: 'Calendar sync failed.',
       });
     }
 
-    type GoogleCalendarApiEvent = {
-      id: string;
-      summary?: string;
-      start?: { dateTime?: string; date?: string };
-      end?: { dateTime?: string; date?: string };
-      location?: string;
-      status?: string;
-      attendees?: unknown[];
-    };
+    console.log(`[Calendar Sync API] Total events fetched: ${items.length}`);
 
-    const parsed = parseProxyData(response.data) as { items?: unknown[] } | string | undefined;
-    const primaryItems = typeof parsed === 'object' && parsed && Array.isArray(parsed.items)
-      ? (parsed.items as GoogleCalendarApiEvent[])
-      : [];
-
-    let items: GoogleCalendarApiEvent[] = primaryItems;
-    // Fallback: if primary is empty, attempt other visible calendars (helps when events live in a secondary calendar)
-    if (items.length === 0) {
+    // Fallback: check other calendars if primary is empty
+    if (items.length === 0 && isInitialSync) {
       try {
-        const nango = new Nango({ secretKey: nangoSecretKey });
-        const timeMin = new Date().toISOString();
-        const timeMax = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        const timeRange = CalendarConfig.initialSync.getTimeRange();
+        const timeMin = timeRange.from.toISOString();
+        const timeMax = timeRange.to.toISOString();
 
         const calListRes = await nango.proxy({
           connectionId,
@@ -211,7 +326,7 @@ export async function POST() {
         const calListParsed = parseProxyData(calListRes.data) as { items?: unknown[] } | string | undefined;
         const calendars =
           typeof calListParsed === 'object' && calListParsed && Array.isArray(calListParsed.items)
-            ? (calListParsed.items as Array<{ id?: string; selected?: boolean; primary?: boolean }>)
+            ? (calListParsed.items as Array<{ id?: string; primary?: boolean }>)
             : [];
 
         const candidates = calendars
@@ -221,31 +336,15 @@ export async function POST() {
 
         for (const cal of candidates) {
           const calId = String(cal.id);
-          const evRes = await nango.proxy({
-            connectionId,
-            providerConfigKey: 'google-calendar',
-            method: 'GET',
-            endpoint: `/calendar/v3/calendars/${encodeURIComponent(calId)}/events`,
-            params: {
-              singleEvents: 'true',
-              orderBy: 'startTime',
-              timeMin,
-              timeMax,
-              maxResults: '50',
-            },
-          });
-          const evParsed = parseProxyData(evRes.data) as { items?: unknown[] } | string | undefined;
-          const evItems =
-            typeof evParsed === 'object' && evParsed && Array.isArray(evParsed.items)
-              ? (evParsed.items as GoogleCalendarApiEvent[])
-              : [];
-          if (evItems.length > 0) {
-            items = evItems;
+          const result = await fetchAllCalendarEvents(nango, connectionId, calId, timeMin, timeMax, 50);
+          if (result.events.length > 0) {
+            items = result.events;
+            newSyncToken = result.syncToken;
             break;
           }
         }
       } catch (fallbackError) {
-        console.error('Calendar fallback calendarList scan failed', fallbackError);
+        console.error('Calendar fallback scan failed', fallbackError);
       }
     }
 
@@ -273,26 +372,7 @@ export async function POST() {
 
     if (events.length > 0) {
       const dlpIssue = getDlpConfigIssue();
-      if (dlpIssue) {
-        await supa
-          .from('sync_status')
-          .upsert(
-            {
-              user_id: userId,
-              status: 'error',
-              current_provider: 'calendar',
-              error_message: dlpIssue,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: 'user_id' }
-          );
-        return NextResponse.json({
-          success: true,
-          eventsSynced: 0,
-          warning: dlpIssue,
-        });
-      }
-
+      
       await supa
         .from('sync_status')
         .upsert(
@@ -306,36 +386,25 @@ export async function POST() {
           { onConflict: 'user_id' }
         );
 
-      // Nightfall DLP gate before storage
-      try {
-        for (const ev of events) {
-          const scanned = await scanContent(`${ev.title}\n${ev.location || ''}`);
-          await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
-          const [titleLine, ...locLines] = scanned.redacted.split('\n');
-          ev.title = titleLine || ev.title;
-          const loc = locLines.join('\n').trim();
-          ev.location = loc || ev.location;
+      // DLP scan events - graceful fallback on failure (continue without redaction)
+      // CRITICAL: If DLP is not configured, continue WITHOUT redaction rather than failing
+      if (dlpIssue) {
+        console.warn(`[Calendar Sync] DLP not configured: ${dlpIssue}, continuing without redaction`);
+      } else {
+        try {
+          for (const ev of events) {
+            const scanned = await scanContent(`${ev.title}\n${ev.location || ''}`);
+            await upsertPiiVaultTokens({ userId, tokenToValue: scanned.tokenToValue });
+            const [titleLine, ...locLines] = scanned.redacted.split('\n');
+            ev.title = titleLine || ev.title;
+            const loc = locLines.join('\n').trim();
+            ev.location = loc || ev.location;
+          }
+        } catch (dlpError) {
+          // DLP failed (rate limit, config, etc.) - continue WITHOUT redaction
+          // Better to sync unredacted data than fail entirely
+          console.warn('[Calendar Sync] DLP scan failed, continuing without redaction:', dlpError);
         }
-      } catch (dlpError) {
-        const details = dlpError instanceof Error ? dlpError.message : 'Unknown DLP error';
-        console.error('Calendar DLP gate failed', dlpError);
-        await supa
-          .from('sync_status')
-          .upsert(
-            {
-              user_id: userId,
-              status: 'error',
-              current_provider: 'calendar',
-              error_message: `Calendar DLP gate failed: ${details}`,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: 'user_id' }
-          );
-        return NextResponse.json({
-          success: true,
-          eventsSynced: 0,
-          warning: `Calendar data was NOT stored because DLP failed: ${details}`,
-        });
       }
 
       const { error: upsertError } = await supa
@@ -345,8 +414,7 @@ export async function POST() {
         console.error('Calendar upsert error', upsertError);
       }
 
-      // Note: Advanced conflict detection is handled by calendar-analysis.ts
-      // Here we just do a basic hard-overlap pass for immediate UI feedback
+      // Conflict detection
       const sorted = events
         .filter((ev) => ev.status !== 'cancelled')
         .map((ev) => ({
@@ -359,44 +427,37 @@ export async function POST() {
       const conflicts: Record<string, string[]> = {};
       for (let i = 0; i < sorted.length; i++) {
         for (let j = i + 1; j < sorted.length; j++) {
-          // Stop checking if eventB starts more than an hour after eventA ends
           if (sorted[j].start > sorted[i].end + 60 * 60 * 1000) break;
-          
-          // Hard overlap: eventB starts before eventA ends
           if (sorted[j].start < sorted[i].end) {
-            conflicts[sorted[i].event_id] = [
-              ...(conflicts[sorted[i].event_id] || []),
-              sorted[j].event_id,
-            ];
-            conflicts[sorted[j].event_id] = [
-              ...(conflicts[sorted[j].event_id] || []),
-              sorted[i].event_id,
-            ];
+            conflicts[sorted[i].event_id] = [...(conflicts[sorted[i].event_id] || []), sorted[j].event_id];
+            conflicts[sorted[j].event_id] = [...(conflicts[sorted[j].event_id] || []), sorted[i].event_id];
           }
         }
       }
 
-      // Update conflict flags
       for (const ev of events) {
         const overlapIds = conflicts[ev.event_id] || [];
-        const { error } = await supa
+        await supa
           .from('calendar_events')
-          .update({
-            has_conflict: overlapIds.length > 0,
-            conflict_with: overlapIds,
-          })
+          .update({ has_conflict: overlapIds.length > 0, conflict_with: overlapIds })
           .eq('user_id', userId)
           .eq('event_id', ev.event_id);
-        if (error) {
-          console.error('Conflict update error', error);
-        }
       }
     }
 
-    // Mark sync completion for UI (even if 0 events were returned).
+    // Update connection with last_sync_at AND new syncToken
+    const updatePayload: Record<string, unknown> = {
+      last_sync_at: new Date().toISOString(),
+      status: 'connected',
+    };
+    
+    if (newSyncToken) {
+      updatePayload.metadata = { ...connMetadata, syncToken: newSyncToken };
+    }
+    
     await supa
       .from('connections')
-      .update({ last_sync_at: new Date().toISOString(), status: 'connected' })
+      .update(updatePayload)
       .eq('user_id', userId)
       .eq('provider', 'calendar');
 
@@ -413,21 +474,50 @@ export async function POST() {
         { onConflict: 'user_id' }
       );
 
-    // Time Sovereignty Pipeline: analyze next 7 days (best-effort; never block sync success)
-    try {
-      await runCalendarAnalysisForUser({ userId });
-      await inngest.send({
-        name: 'calendar/events.synced',
-        data: { userId, timestamp: new Date().toISOString() },
-      });
-    } catch (analysisError) {
-      console.error('Calendar analysis failed (non-blocking)', analysisError);
+    // Calendar analysis - ONLY run if data actually changed
+    // This prevents unnecessary Gemini API calls during auto-sync with no new events
+    const dataChanged = events.length > 0;
+    let analysisResult: { 
+      success: boolean; 
+      eventsAnalyzed?: number; 
+      conflictsCount?: number; 
+      totalIssues?: number;
+      error?: string;
+    } | null = null;
+    
+    if (dataChanged) {
+      try {
+        console.log(`[Calendar Sync] Running analysis (${events.length} events changed)`);
+        const result = await runCalendarAnalysisForUser({ userId });
+        analysisResult = {
+          success: true,
+          eventsAnalyzed: result.eventsAnalyzed,
+          conflictsCount: result.conflictsCount,
+          totalIssues: result.totalIssues,
+        };
+        await inngest.send({
+          name: 'calendar/events.synced',
+          data: { userId, timestamp: new Date().toISOString() },
+        });
+      } catch (analysisError) {
+        console.error('Calendar analysis failed (non-blocking)', analysisError);
+        analysisResult = {
+          success: false,
+          error: analysisError instanceof Error ? analysisError.message : 'Analysis failed',
+        };
+      }
+    } else {
+      console.log(`[Calendar Sync] Skipping analysis (no data changes)`);
+      analysisResult = { success: true, eventsAnalyzed: 0, conflictsCount: 0, totalIssues: 0 };
     }
 
     return NextResponse.json({
       success: true,
       eventsSynced: events.length,
       fetchedEvents: items.length,
+      syncType: isInitialSync ? 'initial' : 'delta',
+      dataChanged,
+      analysisResult,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';

@@ -11,6 +11,7 @@
 
 import { supabaseAdmin } from './supabase-server';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { CalendarConfig, startOfToday, endOfToday } from './config/data-scope';
 
 const supa = supabaseAdmin as unknown as SupabaseClient;
 
@@ -69,10 +70,13 @@ function getTimeContext(): Pick<UserContext, 'currentDate' | 'currentTime' | 'cu
  */
 export async function getUserContext(userId: string): Promise<UserContext> {
   const timeContext = getTimeContext();
-  const today = timeContext.currentDate;
-  const todayStart = `${today}T00:00:00Z`;
-  const todayEnd = `${today}T23:59:59Z`;
-  const weekEnd = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  // Use centralized time helpers for consistency
+  const todayStartDt = startOfToday();
+  const todayEndDt = endOfToday();
+  const todayStart = todayStartDt.toISOString();
+  const todayEnd = todayEndDt.toISOString();
+  // For chat context, use calendar analysis window (future 14 days)
+  const weekEnd = CalendarConfig.analysis.getTimeRange().to.toISOString();
 
   // Fetch all data in parallel
   const [
@@ -171,7 +175,7 @@ export async function getUserContext(userId: string): Promise<UserContext> {
 
   // Briefing info
   const lastBriefingDate = (briefingResult.data as { briefing_date?: string } | null)?.briefing_date || null;
-  const hasTodayBriefing = lastBriefingDate === today;
+  const hasTodayBriefing = lastBriefingDate === timeContext.currentDate;
 
   return {
     ...timeContext,

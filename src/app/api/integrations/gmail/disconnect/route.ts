@@ -3,6 +3,7 @@ import { auth } from '@clerk/nextjs/server';
 import { Nango } from '@nangohq/node';
 import { supabaseAdmin } from '@/lib/supabase-server';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { generateBriefingForUser } from '@/lib/briefing-generator';
 
 export async function POST() {
   try {
@@ -44,13 +45,23 @@ export async function POST() {
 
     await supa.from('connections').delete().eq('provider', 'gmail').eq('connection_id', String(connectionId));
     await supa.from('emails').delete().eq('user_id', userId);
-    // Also delete embeddings from this source
-    await supa.from('embeddings').delete().eq('user_id', userId).eq('source_type', 'gmail');
+    // Also delete embeddings from this source (source_type is 'email', not 'gmail')
+    await supa.from('embeddings').delete().eq('user_id', userId).eq('source_type', 'email');
     
     // CRITICAL: Delete today's briefing so stale Gmail data isn't shown
-    // A new briefing will be regenerated without Gmail data
+    // Then regenerate a new briefing with remaining connected sources
     const today = new Date().toISOString().split('T')[0];
-    await supa.from('briefings').delete().eq('user_id', userId).eq('date', today);
+    await supa.from('briefings').delete().eq('user_id', userId).eq('briefing_date', today);
+
+    // Regenerate briefing with remaining connected sources
+    try {
+      console.log('[Gmail Disconnect] Regenerating briefing without Gmail...');
+      await generateBriefingForUser({ userId });
+      console.log('[Gmail Disconnect] Briefing regenerated successfully');
+    } catch (briefingErr) {
+      console.error('[Gmail Disconnect] Briefing regeneration failed:', briefingErr);
+      // Don't fail the disconnect if briefing fails
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
