@@ -1,63 +1,179 @@
+/**
+ * EmergentOS - Briefing Generation API
+ * 
+ * POST /api/ai/briefing/generate
+ * Generates a daily briefing for the authenticated user.
+ * Per Section 16.6.
+ */
+
 import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { inngest } from '@/lib/inngest';
-import { generateBriefingForUser } from '@/lib/briefing-generator';
-
-function isNonRetryableConfigError(message: string): boolean {
-  const m = message.toLowerCase();
-  
-  // Rate limit errors ARE retryable (handled by Inngest)
-  if (m.includes('429') || m.includes('rate limit') || m.includes('too many requests')) {
-    return false;
-  }
-  
-  // Config/setup errors are NOT retryable
-  return (
-    message.startsWith('Missing ') ||
-    message.includes('must decode to 32 bytes') ||
-    message.includes('Missing GEMINI_API_KEY') ||
-    message.includes('Missing NIGHTFALL_API_KEY') ||
-    message.includes('Missing PII_VAULT_KEY_BASE64')
-  );
-}
+import { supabase } from '@/lib/supabase';
+import { callGeminiJSON, isGeminiConfigured } from '@/lib/llm/gemini';
+import { buildBriefingPrompt } from '@/lib/llm/prompts';
+import { getCurrentUTCDate, daysAgoUTC, startOfDayUTC, endOfDayUTC } from '@/lib/time';
 
 export async function POST() {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const date = new Date().toISOString().slice(0, 10);
-
-  // For manual refresh, generate directly so the user sees results immediately.
-  // If generation fails (env not set, provider not connected, etc.), fall back to enqueuing.
   try {
-    await generateBriefingForUser({ userId, date });
-    return NextResponse.json({ success: true, queued: false, mode: 'direct', date });
-  } catch (error) {
-    const details = error instanceof Error ? error.message : 'Unknown error';
-    console.error('Direct briefing generation failed', error);
+    // 1. Authenticate user
+    const { userId } = await auth();
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
-    // If this is a configuration/schema error, queueing won't help. Fail loudly.
-    if (isNonRetryableConfigError(details)) {
+    // 2. Check Gemini configuration
+    if (!isGeminiConfigured()) {
       return NextResponse.json(
-        { success: false, error: details, mode: 'direct_failed', date },
+        { error: 'Gemini API not configured' },
+        { status: 503 }
+      );
+    }
+
+    // 3. Get user's connected sources
+    const { data: connections } = await supabase
+      .from('connections')
+      .select('provider, status')
+      .eq('user_id', userId)
+      .eq('status', 'connected');
+
+    const connectedSources = {
+      gmail: connections?.some((c) => c.provider === 'gmail') || false,
+      calendar: connections?.some((c) => c.provider === 'calendar') || false,
+      drive: connections?.some((c) => c.provider === 'drive') || false,
+    };
+
+    // 4. If no sources connected, delete today's briefing and return
+    const todayUTC = getCurrentUTCDate();
+    if (!connectedSources.gmail && !connectedSources.calendar && !connectedSources.drive) {
+      await supabase
+        .from('briefings')
+        .delete()
+        .eq('user_id', userId)
+        .eq('briefing_date', todayUTC);
+
+      return NextResponse.json({
+        success: true,
+        message: 'No connected sources, briefing cleared',
+      });
+    }
+
+    // 5. Fetch data from connected sources
+    const yesterday = daysAgoUTC(1).toISOString();
+    const now = new Date();
+    const todayStartUTC = startOfDayUTC(now).toISOString();
+    const tomorrowEndUTC = endOfDayUTC(new Date(now.getTime() + 24 * 60 * 60 * 1000)).toISOString();
+
+    // Emails (last 24 hours)
+    let emails: Array<{
+      sender: string;
+      subject: string;
+      snippet: string | null;
+      received_at: string;
+    }> = [];
+    if (connectedSources.gmail) {
+      const { data } = await supabase
+        .from('emails')
+        .select('sender, subject, snippet, received_at')
+        .eq('user_id', userId)
+        .gte('received_at', yesterday)
+        .order('received_at', { ascending: false });
+      emails = data || [];
+    }
+
+    // Calendar events (today and tomorrow, including multi-day events)
+    let events: Array<{
+      event_id: string;
+      title: string;
+      description: string | null;
+      start_time: string;
+      end_time: string;
+      is_all_day: boolean;
+      location: string | null;
+      attendees: unknown[];
+      has_conflict: boolean;
+      conflict_with: string[];
+    }> = [];
+    if (connectedSources.calendar) {
+      const { data } = await supabase
+        .from('calendar_events')
+        .select('event_id, title, description, start_time, end_time, is_all_day, location, attendees, has_conflict, conflict_with')
+        .eq('user_id', userId)
+        .lte('start_time', tomorrowEndUTC)
+        .gte('end_time', todayStartUTC)
+        .order('start_time', { ascending: true });
+      events = data || [];
+    }
+
+    // Drive documents (last 24 hours)
+    let documents: Array<{
+      name: string;
+      mime_type: string;
+      modified_at: string | null;
+    }> = [];
+    if (connectedSources.drive) {
+      const { data } = await supabase
+        .from('drive_documents')
+        .select('name, mime_type, modified_at')
+        .eq('user_id', userId)
+        .gte('modified_at', yesterday)
+        .order('modified_at', { ascending: false });
+      documents = data || [];
+    }
+
+    // 6. Build prompt and call Gemini
+    const prompt = buildBriefingPrompt(emails, events, documents, connectedSources);
+    
+    console.log(`[Briefing] Generating briefing for user ${userId}`);
+    const responseText = await callGeminiJSON(prompt);
+
+    // 7. Parse JSON response
+    let content: Record<string, unknown>;
+    try {
+      content = JSON.parse(responseText);
+    } catch {
+      console.error('[Briefing] Failed to parse Gemini response:', responseText);
+      return NextResponse.json(
+        { error: 'Failed to parse briefing response' },
         { status: 500 }
       );
     }
 
-    // Otherwise, queue as a best-effort fallback (Inngest retries).
-    await inngest.send({
-      name: 'briefing/generate.requested',
-      data: { userId, date, timestamp: new Date().toISOString() },
-    });
+    // 8. UPSERT into briefings table
+    const { data: briefing, error: upsertError } = await supabase
+      .from('briefings')
+      .upsert(
+        {
+          user_id: userId,
+          briefing_date: todayUTC,
+          content,
+          generated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,briefing_date' }
+      )
+      .select('id')
+      .single();
+
+    if (upsertError) {
+      console.error('[Briefing] UPSERT error:', upsertError);
+      return NextResponse.json(
+        { error: 'Failed to save briefing' },
+        { status: 500 }
+      );
+    }
+
+    console.log(`[Briefing] Briefing generated for user ${userId}, id: ${briefing?.id}`);
+
     return NextResponse.json({
-      success: false,
-      queued: true,
-      mode: 'queued',
-      date,
-      error: `Briefing was queued because direct generation failed: ${details}`,
+      success: true,
+      briefingId: briefing?.id,
+      briefingDate: todayUTC,
     });
+  } catch (error) {
+    console.error('[Briefing API] Error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
   }
-
-  // unreachable
 }
-

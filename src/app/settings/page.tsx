@@ -1,7 +1,15 @@
 'use client';
 
+/**
+ * EmergentOS - Settings Page
+ * 
+ * Displays connection status from SyncManager and allows
+ * connecting/disconnecting providers.
+ */
+
+import { useEffect, useState, useCallback } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type React from 'react';
 import { 
   User, 
@@ -16,29 +24,45 @@ import {
   Clock,
   Shield,
   AlertTriangle,
+  Loader2,
+  Trash2,
+  Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { toast } from 'sonner';
 import { ConnectGmail } from '@/components/ConnectGmail';
 import { ConnectCalendar } from '@/components/ConnectCalendar';
 import { ConnectDrive } from '@/components/ConnectDrive';
-import { useSyncManager, type ProviderKey } from '@/lib/sync-manager';
 import { cn } from '@/lib/utils';
+import { useSyncManager, type ProviderKey } from '@/lib/sync-manager';
+import { toast } from 'sonner';
+import { formatTimeAgo } from '@/lib/time';
+
+// ============================================================================
+// Types
+// ============================================================================
+
+type ConnectionStatusType = 'connected' | 'disconnected' | 'error' | 'connecting' | 'disconnecting';
 
 interface ConnectionCardProps {
   name: string;
   description: string;
   icon: React.ReactNode;
   iconBg: string;
-  status: 'connected' | 'disconnected' | 'error' | 'connecting';
-  lastSync?: string;
-  itemCount?: number;
-  action: React.ReactNode;
+  status: ConnectionStatusType;
+  lastSync?: string | null;
+  error?: string | null;
+  connectAction: React.ReactNode;
+  onDisconnect: () => void;
+  isDisconnecting: boolean;
 }
+
+// ============================================================================
+// Connection Card Component
+// ============================================================================
 
 function ConnectionCard({
   name,
@@ -47,282 +71,172 @@ function ConnectionCard({
   iconBg,
   status,
   lastSync,
-  action,
+  error,
+  connectAction,
+  onDisconnect,
+  isDisconnecting,
 }: ConnectionCardProps) {
+  const isConnected = status === 'connected';
+  const isError = status === 'error';
+  const isConnecting = status === 'connecting';
+
   return (
     <div className={cn(
       'flex items-center justify-between gap-4 p-4 rounded-lg border bg-secondary/20 hover:bg-secondary/30 transition-colors',
-      status === 'connected' ? 'border-border/50' : 'border-border/30'
+      isConnected && 'border-emerald-500/30',
+      isError && 'border-red-500/30',
+      !isConnected && !isError && 'border-border/30'
     )}>
       <div className="flex items-center gap-3 flex-1 min-w-0">
-        <div className={cn('h-10 w-10 rounded-lg flex items-center justify-center shrink-0', iconBg)}>
+        <div className={cn(
+          'h-10 w-10 rounded-lg flex items-center justify-center shrink-0',
+          iconBg,
+          isError && 'bg-red-500/10'
+        )}>
           {icon}
         </div>
         <div className="min-w-0 flex-1">
           <h4 className="font-medium text-sm text-foreground">{name}</h4>
           <p className="text-xs text-muted-foreground mt-0.5 truncate">{description}</p>
-          {status === 'connected' && lastSync && (
+          {isConnected && lastSync && (
             <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-muted-foreground/70">
               <Clock className="h-3 w-3" />
-              <span>Last sync: {lastSync}</span>
+              <span>Last sync: {formatTimeAgo(lastSync)}</span>
+            </div>
+          )}
+          {isError && error && (
+            <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-red-400">
+              <AlertTriangle className="h-3 w-3" />
+              <span>{error}</span>
             </div>
           )}
         </div>
       </div>
       <div className="flex items-center gap-4 shrink-0">
+        {/* Status Badge */}
         <span className={cn(
-          'text-[11px] font-medium flex items-center gap-1 w-24 justify-end',
-          status === 'connected' && 'text-emerald-500',
-          status === 'connecting' && 'text-amber-500',
+          'text-[11px] font-medium flex items-center gap-1 w-28 justify-end',
+          isConnected && 'text-emerald-500',
+          isConnecting && 'text-amber-500',
           status === 'disconnected' && 'text-muted-foreground',
-          status === 'error' && 'text-red-500'
+          isError && 'text-red-500',
+          isDisconnecting && 'text-amber-500'
         )}>
-          {status === 'connected' && <><CheckCircle2 className="h-3 w-3" />Connected</>}
-          {status === 'connecting' && <><Clock className="h-3 w-3 animate-spin" />Connecting...</>}
+          {isConnected && !isDisconnecting && <><CheckCircle2 className="h-3 w-3" />Connected</>}
+          {isConnecting && <><Loader2 className="h-3 w-3 animate-spin" />Connecting...</>}
           {status === 'disconnected' && <><XCircle className="h-3 w-3" />Not connected</>}
-          {status === 'error' && <><AlertTriangle className="h-3 w-3" />Error</>}
+          {isError && <><AlertTriangle className="h-3 w-3" />Error</>}
+          {isDisconnecting && <><Loader2 className="h-3 w-3 animate-spin" />Disconnecting...</>}
         </span>
+
+        {/* Action Button */}
         <div className="w-[130px] flex justify-end">
-          {action}
+          {isConnected || isError ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onDisconnect}
+              disabled={isDisconnecting}
+              className="h-9 w-full text-xs font-medium border-red-500/20 text-red-400 hover:bg-red-500/10 hover:text-red-300 hover:border-red-500/30 transition-all shadow-sm"
+            >
+              {isDisconnecting ? (
+                <><Loader2 className="h-3 w-3 mr-1.5 animate-spin" />Disconnecting</>
+              ) : (
+                <><Trash2 className="h-3 w-3 mr-1.5" />Disconnect</>
+              )}
+            </Button>
+          ) : (
+            connectAction
+          )}
         </div>
       </div>
     </div>
   );
 }
 
+// ============================================================================
+// Settings Page
+// ============================================================================
+
 export default function SettingsPage() {
   const { user } = useUser();
-  // CRITICAL: Use SyncManager for connection handling - triggers sync on connect
-  const { onProviderConnected, onProviderDisconnected } = useSyncManager();
+  const router = useRouter();
+  const { providers, refreshConnections, onProviderDisconnected, onProviderConnected, startProviderSync } = useSyncManager();
   
-  const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'disconnected' | 'error'>>({
-    gmail: 'disconnected',
-    calendar: 'disconnected',
-    drive: 'disconnected',
-  });
-  const [pending, setPending] = useState<Record<string, boolean>>({
+  const [disconnecting, setDisconnecting] = useState<Record<ProviderKey, boolean>>({
     gmail: false,
     calendar: false,
     drive: false,
   });
-  const [pendingUntil, setPendingUntil] = useState<Record<string, number | null>>({
-    gmail: null,
-    calendar: null,
-    drive: null,
-  });
-  const [flashConnected, setFlashConnected] = useState<Record<string, boolean>>({
-    gmail: false,
-    calendar: false,
-    drive: false,
-  });
+  
+  const [onboardingStatus, setOnboardingStatus] = useState<string | null>(null);
 
-  const refreshConnections = useCallback(async () => {
-    if (!user?.id) return;
-    try {
-      const res = await fetch('/api/connections', { method: 'GET', cache: 'no-store' });
-      const body = (await res.json().catch(() => ({}))) as {
-        connections?: Record<string, { status?: 'connected' | 'disconnected' | 'error' }>;
-        error?: string;
-      };
-      if (!res.ok) throw new Error(body?.error || 'Failed to load connections');
-
-      const next = { gmail: 'disconnected', calendar: 'disconnected', drive: 'disconnected' } as Record<
-        string,
-        'connected' | 'disconnected' | 'error'
-      >;
-      const c = body.connections || {};
-      for (const k of Object.keys(next)) {
-        const s = c?.[k]?.status;
-        if (s === 'connected' || s === 'error' || s === 'disconnected') next[k] = s;
-      }
-      setConnectionStatus((prev) => {
-        // Flash "Connected!" on transition (not-connected -> connected), then revert to normal disconnect button.
-        for (const k of Object.keys(next)) {
-          if (prev[k] !== 'connected' && next[k] === 'connected') {
-            setFlashConnected((f) => ({ ...f, [k]: true }));
-            window.setTimeout(() => setFlashConnected((f) => ({ ...f, [k]: false })), 2000);
-          }
-        }
-        // Clear pending if provider is now connected (or errored)
-        setPending((p) => ({
-          gmail: next.gmail === 'connected' || next.gmail === 'error' ? false : p.gmail,
-          calendar: next.calendar === 'connected' || next.calendar === 'error' ? false : p.calendar,
-          drive: next.drive === 'connected' || next.drive === 'error' ? false : p.drive,
-        }));
-        setPendingUntil((u) => ({
-          gmail: next.gmail === 'connected' || next.gmail === 'error' ? null : u.gmail,
-          calendar: next.calendar === 'connected' || next.calendar === 'error' ? null : u.calendar,
-          drive: next.drive === 'connected' || next.drive === 'error' ? null : u.drive,
-        }));
-        return next;
-      });
-    } catch (e) {
-      console.error('Failed to load connections', e);
-    }
-  }, [user?.id]);
-
-  const markConnecting = useCallback((provider: 'gmail' | 'calendar' | 'drive') => {
-    setPending((p) => ({ ...p, [provider]: true }));
-    setPendingUntil((u) => ({ ...u, [provider]: Date.now() + 30_000 }));
+  // Fetch onboarding status on mount
+  useEffect(() => {
+    fetch('/api/onboarding/status')
+      .then(res => res.json())
+      .then(data => setOnboardingStatus(data.status || 'pending'))
+      .catch(() => setOnboardingStatus('pending'));
   }, []);
 
-  // CRITICAL: Handler for when a provider successfully connects
-  // This calls onProviderConnected which triggers a sync
-  // NOTE: We must wait for the Nango webhook to fire (creates DB row) before syncing
-  // If webhook fails, we create the connection directly via a fallback API
-  const handleProviderConnected = useCallback(
-    async (provider: ProviderKey) => {
-      // Poll for connection to appear in DB (webhook might take a few seconds)
-      const maxAttempts = 8;
-      const pollInterval = 1000; // 1 second
-      
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        await refreshConnections();
-        
-        // Check if connection is now confirmed in DB
-        const res = await fetch('/api/connections', { cache: 'no-store' });
-        const body = await res.json().catch(() => ({}));
-        const status = body?.connections?.[provider]?.status;
-        
-        if (status === 'connected') {
-          console.log(`Provider ${provider} confirmed in DB after ${attempt + 1} attempts`);
-          
-          // CRITICAL: Clear pending state BEFORE triggering sync
-          setPending((p) => ({ ...p, [provider]: false }));
-          setPendingUntil((u) => ({ ...u, [provider]: null }));
-          
-          // Show brief "Connected!" flash
-          setFlashConnected((f) => ({ ...f, [provider]: true }));
-          setTimeout(() => setFlashConnected((f) => ({ ...f, [provider]: false })), 2000);
-          
-          // Connection confirmed - now trigger sync
-          await onProviderConnected(provider);
-          
-          // Final refresh to ensure UI is up to date
-          await refreshConnections();
-          return;
-        }
-        
-        // Wait before next attempt
-        await new Promise((r) => setTimeout(r, pollInterval));
-      }
-      
-      // FALLBACK: Webhook didn't create the connection - create it directly
-      // This handles the case where Nango webhook fails to get user details
-      console.log(`Provider ${provider} not confirmed by webhook, attempting direct creation...`);
-      try {
-        const createRes = await fetch('/api/nango/connect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider }),
-        });
-        const createBody = await createRes.json().catch(() => ({}));
-        
-        if (createRes.ok && createBody.success) {
-          console.log(`Provider ${provider} created directly via fallback`);
-          
-          setPending((p) => ({ ...p, [provider]: false }));
-          setPendingUntil((u) => ({ ...u, [provider]: null }));
-          setFlashConnected((f) => ({ ...f, [provider]: true }));
-          setTimeout(() => setFlashConnected((f) => ({ ...f, [provider]: false })), 2000);
-          
-          await onProviderConnected(provider);
-          await refreshConnections();
-          return;
-        }
-      } catch (err) {
-        console.error('Fallback connection creation failed:', err);
-      }
-      
-      // If we get here, connection wasn't confirmed and fallback failed
-      console.warn(`Provider ${provider} could not be confirmed or created`);
-      setPending((p) => ({ ...p, [provider]: false }));
-      setPendingUntil((u) => ({ ...u, [provider]: null }));
-      toast.warning('Connection is taking longer than expected. Please refresh and try syncing.');
-    },
-    [refreshConnections, onProviderConnected]
-  );
+  // ============================================================================
+  // Disconnect Handler
+  // ============================================================================
 
-  useEffect(() => {
-    if (!user?.id) return;
-    const anyPending = pending.gmail || pending.calendar || pending.drive;
-    if (!anyPending) return;
+  const handleDisconnect = useCallback(async (provider: ProviderKey) => {
+    setDisconnecting(prev => ({ ...prev, [provider]: true }));
 
-    const interval = window.setInterval(() => {
-      void refreshConnections();
-
-      const now = Date.now();
-      const timedOutProviders: Array<'gmail' | 'calendar' | 'drive'> = [];
-      (['gmail', 'calendar', 'drive'] as const).forEach((p) => {
-        const until = pendingUntil[p];
-        if (pending[p] && typeof until === 'number' && now > until) timedOutProviders.push(p);
+    try {
+      const response = await fetch(`/api/integrations/${provider}/disconnect`, {
+        method: 'POST',
       });
 
-      if (timedOutProviders.length > 0) {
-        setPending((prev) => {
-          const next = { ...prev };
-          for (const p of timedOutProviders) next[p] = false;
-          return next;
-        });
-        setPendingUntil((prev) => {
-          const next = { ...prev };
-          for (const p of timedOutProviders) next[p] = null;
-          return next;
-        });
-        toast.warning('Connection is taking longer than expected', {
-          description: 'The OAuth succeeded, but the webhook has not confirmed the connection yet. Please refresh and try again.',
-        });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to disconnect');
       }
-    }, 1000);
 
-    return () => window.clearInterval(interval);
-  }, [pending, pendingUntil, refreshConnections, user?.id]);
+      // Update local state
+      onProviderDisconnected(provider);
+      
+      // Dispatch event for other components
+      window.dispatchEvent(
+        new CustomEvent('eos:connections-updated', {
+          detail: {
+            providers: [provider],
+            trigger: 'disconnect',
+            dataChanged: true,
+            briefingRegenerated: true,
+            phase: 'complete',
+          }
+        })
+      );
 
-  useEffect(() => {
-    void refreshConnections();
-  }, [refreshConnections]);
-
-  const disconnectCalendar = useCallback(async () => {
-    try {
-      const res = await fetch('/api/integrations/calendar/disconnect', { method: 'POST' });
-      if (!res.ok) throw new Error('Failed to disconnect');
-      toast.success('Calendar disconnected');
-      // CRITICAL: Notify SyncManager of disconnection (updates state, regenerates briefing)
-      await onProviderDisconnected('calendar');
-      await refreshConnections();
-    } catch (e) {
-      console.error(e);
-      toast.error('Failed to disconnect calendar');
+      toast.success(`${provider.charAt(0).toUpperCase() + provider.slice(1)} disconnected`, {
+        description: 'Your data has been removed.',
+      });
+    } catch (error) {
+      console.error(`[Settings] Disconnect error for ${provider}:`, error);
+      toast.error('Failed to disconnect', {
+        description: error instanceof Error ? error.message : 'Please try again.',
+      });
+    } finally {
+      setDisconnecting(prev => ({ ...prev, [provider]: false }));
     }
-  }, [refreshConnections, onProviderDisconnected]);
+  }, [onProviderDisconnected]);
 
-  const disconnectGmail = useCallback(async () => {
-    try {
-      const res = await fetch('/api/integrations/gmail/disconnect', { method: 'POST' });
-      if (!res.ok) throw new Error('Failed to disconnect');
-      toast.success('Gmail disconnected');
-      // CRITICAL: Notify SyncManager of disconnection (updates state, regenerates briefing)
-      await onProviderDisconnected('gmail');
-      await refreshConnections();
-    } catch (e) {
-      console.error(e);
-      toast.error('Failed to disconnect Gmail');
-    }
-  }, [refreshConnections, onProviderDisconnected]);
+  // ============================================================================
+  // Connection Success Handler
+  // ============================================================================
 
-  const disconnectDrive = useCallback(async () => {
-    try {
-      const res = await fetch('/api/integrations/drive/disconnect', { method: 'POST' });
-      if (!res.ok) throw new Error('Failed to disconnect');
-      toast.success('Drive disconnected');
-      // CRITICAL: Notify SyncManager of disconnection (updates state, regenerates briefing)
-      await onProviderDisconnected('drive');
-      await refreshConnections();
-    } catch (e) {
-      console.error(e);
-      toast.error('Failed to disconnect Drive');
-    }
-  }, [refreshConnections, onProviderDisconnected]);
+  const handleConnectionSuccess = useCallback(async (provider: ProviderKey) => {
+    // Notify sync manager about the new connection to trigger initial sync
+    await onProviderConnected(provider);
+  }, [onProviderConnected]);
+
+  // ============================================================================
+  // Render
+  // ============================================================================
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -334,7 +248,7 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <Tabs defaultValue="connections" className="space-y-6">
+      <Tabs defaultValue="account" className="space-y-6">
         <TabsList className="w-full justify-start bg-transparent border-b border-border rounded-none p-0 h-auto gap-0">
           <TabsTrigger 
             value="account" 
@@ -368,131 +282,199 @@ export default function SettingsPage() {
 
         {/* Account Tab */}
         <TabsContent value="account" className="space-y-5 pt-6">
-          <div className="space-y-4">
-            <h3 className="text-sm font-medium text-foreground">Profile</h3>
-            <div className="p-4 rounded-lg border border-border/30 bg-secondary/20">
+          <h3 className="text-sm font-medium text-foreground">Profile</h3>
+          
+          {/* Profile and Profile Setup side by side */}
+          <div className="p-4 rounded-lg border border-border/30 bg-secondary/20">
             <div className="flex items-center gap-4">
-                <Avatar className="h-14 w-14">
+              <Avatar className="h-14 w-14 shrink-0">
                 <AvatarImage src={user?.imageUrl} />
-                  <AvatarFallback className="text-sm font-medium bg-primary/10 text-primary">
+                <AvatarFallback className="text-sm font-medium bg-primary/10 text-primary">
                   {user?.firstName?.[0]}{user?.lastName?.[0]}
                 </AvatarFallback>
               </Avatar>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h4 className="font-medium text-sm text-foreground">
-                  {user?.fullName || 'User'}
-                </h4>
-                    <span className="text-[10px] text-emerald-500 font-medium flex items-center gap-0.5">
-                      <Shield className="h-3 w-3" />
-                      Verified
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <h4 className="font-medium text-sm text-foreground">
+                    {user?.fullName || 'User'}
+                  </h4>
+                  <span className="text-[10px] text-emerald-500 font-medium flex items-center gap-0.5">
+                    <Shield className="h-3 w-3" />
+                    Verified
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
                   {user?.primaryEmailAddress?.emailAddress}
                 </p>
-                </div>
+              </div>
+              
+              {/* Profile Setup Status - moved to the right */}
+              <div className="shrink-0">
+                {onboardingStatus === null && (
+                  <div className="h-9 w-32 bg-secondary/50 rounded-md animate-pulse" />
+                )}
+
+                {onboardingStatus === 'skipped' && (
+                  <Button 
+                    onClick={() => router.push('/onboarding')}
+                    className="bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white gap-2 shadow-sm font-medium transition-all hover:shadow-md hover:scale-[1.02]"
+                    size="default"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    Complete Profile
+                  </Button>
+                )}
+                
+                {onboardingStatus === 'in_progress' && (
+                  <Button 
+                    onClick={() => router.push('/onboarding')}
+                    className="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white gap-2 shadow-sm font-medium transition-all hover:shadow-md hover:scale-[1.02]"
+                    size="default"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    Continue Setup
+                  </Button>
+                )}
+
+                {onboardingStatus === 'pending' && (
+                  <Button 
+                    onClick={() => router.push('/onboarding')}
+                    className="bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 text-white gap-2 shadow-sm font-medium transition-all hover:shadow-md hover:scale-[1.02]"
+                    size="default"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    Start Onboarding
+                  </Button>
+                )}
+                
+                {onboardingStatus === 'completed' && (
+                  <div className="flex items-center gap-1.5 text-emerald-500 text-xs font-medium px-3 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    <span>Profile Complete</span>
+                  </div>
+                )}
               </div>
             </div>
-            <p className="text-[11px] text-muted-foreground/70">
-              Account managed by Clerk. Click your avatar in the header to update profile settings.
-            </p>
           </div>
+          
+          <p className="text-[11px] text-muted-foreground/70">
+            Account managed by Clerk. Click your avatar in the header to update profile settings.
+          </p>
         </TabsContent>
 
         {/* Connections Tab */}
         <TabsContent value="connections" className="space-y-5 pt-6">
           <div className="space-y-3">
-            <h3 className="text-sm font-medium text-foreground">Google Workspace</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium text-foreground">Google Workspace</h3>
+              <span className="text-[10px] text-muted-foreground">
+                {[providers.gmail, providers.calendar, providers.drive].filter(p => p.status === 'connected').length}/3 connected
+              </span>
+            </div>
             <div className="space-y-2">
+              {/* Gmail */}
               <ConnectionCard
                 name="Gmail"
                 description="Access your email for AI insights and summaries"
-                icon={<Mail className="h-5 w-5 text-rose-400" />}
+                icon={<Mail className={cn(
+                  'h-5 w-5',
+                  providers.gmail.status === 'connected' ? 'text-rose-400' : 
+                  providers.gmail.status === 'error' ? 'text-red-400' : 'text-muted-foreground'
+                )} />}
                 iconBg="bg-rose-500/10"
-                status={pending.gmail ? 'connecting' : connectionStatus.gmail}
-                action={
-                  connectionStatus.gmail === 'connected' ? (
-                    flashConnected.gmail ? (
-                      <span className="text-xs text-emerald-500 font-semibold">Connected!</span>
-                    ) : (
-                      <Button variant="outline" size="sm" onClick={disconnectGmail} className="h-8 w-full text-xs">
-                        Disconnect
-                      </Button>
-                    )
-                  ) : (
-                    <ConnectGmail
-                      onConnectionStart={() => markConnecting('gmail')}
-                      onConnectionSuccess={() => void handleProviderConnected('gmail')}
-                      onConnectionError={() => setPending((p) => ({ ...p, gmail: false }))}
-                      buttonVariant="default"
-                      buttonSize="sm"
-                      showIcon={false}
-                      label="Connect"
-                      className="h-8 w-full text-xs bg-teal-500 hover:bg-teal-600 text-white"
-                    />
-                  )
+                status={providers.gmail.status}
+                lastSync={providers.gmail.lastSyncAt}
+                error={providers.gmail.error}
+                connectAction={
+                  <ConnectGmail
+                    buttonVariant="default"
+                    buttonSize="sm"
+                    showIcon={false}
+                    label="Connect"
+                    className="h-9 w-full text-xs font-medium bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white shadow-sm border-0"
+                    onSyncStart={() => startProviderSync('gmail')}
+                    onConnectionSuccess={() => handleConnectionSuccess('gmail')}
+                  />
                 }
+                onDisconnect={() => handleDisconnect('gmail')}
+                isDisconnecting={disconnecting.gmail}
               />
+
+              {/* Calendar */}
               <ConnectionCard
                 name="Google Calendar"
                 description="Sync your calendar events and detect conflicts"
-                icon={<Calendar className="h-5 w-5 text-sky-400" />}
+                icon={<Calendar className={cn(
+                  'h-5 w-5',
+                  providers.calendar.status === 'connected' ? 'text-sky-400' : 
+                  providers.calendar.status === 'error' ? 'text-red-400' : 'text-muted-foreground'
+                )} />}
                 iconBg="bg-sky-500/10"
-                status={pending.calendar ? 'connecting' : connectionStatus.calendar}
-                action={
-                  connectionStatus.calendar === 'connected' ? (
-                    flashConnected.calendar ? (
-                      <span className="text-xs text-emerald-500 font-semibold">Connected!</span>
-                    ) : (
-                      <Button variant="outline" size="sm" onClick={disconnectCalendar} className="h-8 w-full text-xs">
-                        Disconnect
-                      </Button>
-                    )
-                  ) : (
-                    <ConnectCalendar
-                      onConnectionStart={() => markConnecting('calendar')}
-                      onConnectionSuccess={() => void handleProviderConnected('calendar')}
-                      onConnectionError={() => setPending((p) => ({ ...p, calendar: false }))}
-                      buttonVariant="default"
-                      buttonSize="sm"
-                      showIcon={false}
-                      label="Connect"
-                      className="h-8 w-full text-xs bg-teal-500 hover:bg-teal-600 text-white"
-                    />
-                  )
+                status={providers.calendar.status}
+                lastSync={providers.calendar.lastSyncAt}
+                error={providers.calendar.error}
+                connectAction={
+                  <ConnectCalendar
+                    buttonVariant="default"
+                    buttonSize="sm"
+                    showIcon={false}
+                    label="Connect"
+                    className="h-9 w-full text-xs font-medium bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white shadow-sm border-0"
+                    onSyncStart={() => startProviderSync('calendar')}
+                    onConnectionSuccess={() => handleConnectionSuccess('calendar')}
+                  />
                 }
+                onDisconnect={() => handleDisconnect('calendar')}
+                isDisconnecting={disconnecting.calendar}
               />
+
+              {/* Drive */}
               <ConnectionCard
                 name="Google Drive"
                 description="Access your documents for context and analysis"
-                icon={<FileText className="h-5 w-5 text-emerald-400" />}
+                icon={<FileText className={cn(
+                  'h-5 w-5',
+                  providers.drive.status === 'connected' ? 'text-emerald-400' : 
+                  providers.drive.status === 'error' ? 'text-red-400' : 'text-muted-foreground'
+                )} />}
                 iconBg="bg-emerald-500/10"
-                status={pending.drive ? 'connecting' : connectionStatus.drive}
-                action={
-                  connectionStatus.drive === 'connected' ? (
-                    flashConnected.drive ? (
-                      <span className="text-xs text-emerald-500 font-semibold">Connected!</span>
-                    ) : (
-                      <Button variant="outline" size="sm" onClick={disconnectDrive} className="h-8 w-full text-xs">
-                        Disconnect
-                      </Button>
-                    )
-                  ) : (
-                    <ConnectDrive
-                      onConnectionStart={() => markConnecting('drive')}
-                      onConnectionSuccess={() => void handleProviderConnected('drive')}
-                      onConnectionError={() => setPending((p) => ({ ...p, drive: false }))}
-                      buttonVariant="default"
-                      buttonSize="sm"
-                      showIcon={false}
-                      label="Connect"
-                      className="h-8 w-full text-xs bg-teal-500 hover:bg-teal-600 text-white"
-                    />
-                  )
+                status={providers.drive.status}
+                lastSync={providers.drive.lastSyncAt}
+                error={providers.drive.error}
+                connectAction={
+                  <ConnectDrive
+                    buttonVariant="default"
+                    buttonSize="sm"
+                    showIcon={false}
+                    label="Connect"
+                    className="h-9 w-full text-xs font-medium bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white shadow-sm border-0"
+                    onSyncStart={() => startProviderSync('drive')}
+                    onConnectionSuccess={() => handleConnectionSuccess('drive')}
+                  />
                 }
+                onDisconnect={() => handleDisconnect('drive')}
+                isDisconnecting={disconnecting.drive}
               />
             </div>
+          </div>
+
+          {/* Connection Info */}
+          <div className="p-4 rounded-lg border border-border/30 bg-secondary/10">
+            <h4 className="text-xs font-medium text-foreground mb-2">About Connections</h4>
+            <ul className="text-[11px] text-muted-foreground space-y-1.5">
+              <li className="flex items-start gap-2">
+                <CheckCircle2 className="h-3 w-3 text-emerald-400 mt-0.5 shrink-0" />
+                <span>Data is synced securely and stays private</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <CheckCircle2 className="h-3 w-3 text-emerald-400 mt-0.5 shrink-0" />
+                <span>Auto-sync runs every 10 minutes</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <CheckCircle2 className="h-3 w-3 text-emerald-400 mt-0.5 shrink-0" />
+                <span>Disconnect anytime to remove your data</span>
+              </li>
+            </ul>
           </div>
         </TabsContent>
 
@@ -502,34 +484,34 @@ export default function SettingsPage() {
             <h3 className="text-sm font-medium text-foreground">Notifications</h3>
             <div className="rounded-lg border border-border/30 divide-y divide-border/30">
               <div className="flex items-center justify-between p-4 hover:bg-secondary/20 transition-colors">
-              <div>
+                <div>
                   <Label htmlFor="daily-briefing" className="text-sm font-medium text-foreground cursor-pointer">Daily Briefing</Label>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                  Receive your AI briefing every morning
-                </p>
+                    Receive your AI briefing every morning at 6 AM UTC
+                  </p>
+                </div>
+                <Switch id="daily-briefing" defaultChecked />
               </div>
-              <Switch id="daily-briefing" defaultChecked />
-            </div>
             
               <div className="flex items-center justify-between p-4 hover:bg-secondary/20 transition-colors">
-              <div>
+                <div>
                   <Label htmlFor="conflict-alerts" className="text-sm font-medium text-foreground cursor-pointer">Calendar Conflict Alerts</Label>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                  Get notified about scheduling conflicts
-                </p>
+                    Get notified about scheduling conflicts
+                  </p>
+                </div>
+                <Switch id="conflict-alerts" defaultChecked />
               </div>
-              <Switch id="conflict-alerts" defaultChecked />
-            </div>
             
               <div className="flex items-center justify-between p-4 hover:bg-secondary/20 transition-colors">
-              <div>
-                  <Label htmlFor="email-summary" className="text-sm font-medium text-foreground cursor-pointer">Email Summary</Label>
+                <div>
+                  <Label htmlFor="imminent-events" className="text-sm font-medium text-foreground cursor-pointer">Imminent Event Alerts</Label>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                  Weekly digest of important emails
-                </p>
+                    Notify when events start within 30 minutes
+                  </p>
+                </div>
+                <Switch id="imminent-events" defaultChecked />
               </div>
-              <Switch id="email-summary" />
-            </div>
             </div>
           </div>
         </TabsContent>
@@ -537,14 +519,16 @@ export default function SettingsPage() {
         {/* Data Tab */}
         <TabsContent value="data" className="space-y-5 pt-6">
           <div className="space-y-3">
-            <h3 className="text-sm font-medium text-foreground">Export</h3>
+            <h3 className="text-sm font-medium text-foreground">Data Retention</h3>
             <div className="p-4 rounded-lg border border-border/30 bg-secondary/20">
               <p className="text-xs text-muted-foreground mb-3">
-              Download all your data including emails, calendar events, and AI-generated content.
-            </p>
-              <Button variant="secondary" size="sm" className="h-8 text-xs">
-                Export My Data
-              </Button>
+                Your synced data is automatically cleaned up after 30 days. 
+                Briefings older than 30 days are also removed.
+              </p>
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground/70">
+                <Clock className="h-3 w-3" />
+                <span>Cleanup runs daily at 3 AM UTC</span>
+              </div>
             </div>
           </div>
           
@@ -552,10 +536,28 @@ export default function SettingsPage() {
             <h3 className="text-sm font-medium text-red-500">Danger Zone</h3>
             <div className="p-4 rounded-lg border border-red-500/20 bg-red-500/5">
               <p className="text-xs text-muted-foreground mb-3">
-              Permanently delete all your data. This action cannot be undone.
-            </p>
-              <Button variant="destructive" size="sm" className="h-8 text-xs">
-                Purge All Data
+                Disconnect all providers to remove all your synced data. 
+                This action cannot be undone.
+              </p>
+              <Button 
+                variant="destructive" 
+                size="sm" 
+                className="h-8 text-xs"
+                onClick={() => {
+                  const connectedProviders = (['gmail', 'calendar', 'drive'] as ProviderKey[])
+                    .filter(p => providers[p].status === 'connected');
+                  
+                  if (connectedProviders.length === 0) {
+                    toast.info('No connections to remove');
+                    return;
+                  }
+
+                  // Disconnect all providers
+                  connectedProviders.forEach(p => handleDisconnect(p));
+                }}
+                disabled={!Object.values(providers).some(p => p.status === 'connected')}
+              >
+                Disconnect All &amp; Purge Data
               </Button>
             </div>
           </div>

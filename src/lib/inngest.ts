@@ -1,8 +1,14 @@
+/**
+ * EmergentOS - Inngest Client
+ * 
+ * Event-driven background job orchestration.
+ */
+
 import { Inngest } from 'inngest';
 
 /**
- * Inngest client for EmergentOS
- * Used to define and trigger workflow functions
+ * Inngest client instance
+ * Used for sending events and defining functions
  */
 export const inngest = new Inngest({
   id: 'emergent-os',
@@ -12,12 +18,21 @@ export const inngest = new Inngest({
 /**
  * Event types for type-safe event handling
  */
-export type Events = {
-  'gmail/connection.established': {
-    data: {
-      userId: string;
-      providerConfigKey: string;
-    };
+export type SyncRequestedEvent = {
+  name: 'gmail/sync.requested' | 'calendar/sync.requested' | 'drive/sync.requested';
+  data: {
+    userId: string;
+    connectionId: string;
+    trigger: 'connect' | 'manual' | 'auto' | 'date_boundary';
+    idempotencyKey: string;
+    jobId: string;
   };
 };
 
+export type Events = {
+  'gmail/sync.requested': SyncRequestedEvent['data'];
+  'calendar/sync.requested': SyncRequestedEvent['data'];
+  'drive/sync.requested': SyncRequestedEvent['data'];
+};
+
+export default inngest;

@@ -1,5 +1,12 @@
 'use client';
 
+/**
+ * EmergentOS - OmniPanel Chat
+ * 
+ * AI-powered chat with streaming responses from /api/ai/chat
+ * Uses SSE (Server-Sent Events) for real-time streaming.
+ */
+
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -8,7 +15,6 @@ import {
   Send,
   X,
   ChevronUp,
-  Loader2,
   Bot,
   User,
   Mail,
@@ -17,21 +23,12 @@ import {
   Plus,
   MessageSquare,
   Minimize2,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { ChatMessage, ChatSource } from './types';
-
-type ApiHistoryRow = {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  sources?: unknown[] | null;
-  created_at: string;
-};
-
-function isUiRole(role: ApiHistoryRow['role']): role is 'user' | 'assistant' {
-  return role === 'user' || role === 'assistant';
-}
+import { useSyncManager } from '@/lib/sync-manager';
 
 interface OmniPanelProps {
   isOpen: boolean;
@@ -48,15 +45,28 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
-  const [isThinking, setIsThinking] = useState(false);
-  const [sessionId, setSessionId] = useState<string>('');
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
   const inputRef = useRef<HTMLInputElement>(null);
   const expandedInputRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const { providers } = useSyncManager();
+  const hasConnections = Object.values(providers).some(p => p.status === 'connected');
+
+  // ============================================================================
+  // Auto-scroll to bottom
+  // ============================================================================
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
+
+  // ============================================================================
+  // Focus input when panel opens
+  // ============================================================================
 
   useEffect(() => {
     if (isOpen && isExpanded && expandedInputRef.current) {
@@ -66,140 +76,178 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
     }
   }, [isOpen, isExpanded]);
 
+  // ============================================================================
+  // Cleanup on unmount
+  // ============================================================================
+
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const key = 'eos_chat_session_id';
-    const existing = window.localStorage.getItem(key);
-    const next = existing && existing.length > 0 ? existing : window.crypto.randomUUID();
-    if (!existing) window.localStorage.setItem(key, next);
-    setSessionId(next);
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, []);
 
-  const loadHistory = useCallback(async () => {
-    if (!sessionId) return;
+  // ============================================================================
+  // Send Message with Streaming
+  // ============================================================================
+
+  const sendMessage = useCallback(async (text: string) => {
+    if (!text.trim() || isStreaming) return;
+
+    if (!hasConnections) {
+      toast.warning('Please connect at least one data source', {
+        description: 'Go to Settings to connect Gmail, Calendar, or Drive.',
+      });
+      return;
+    }
+
+    if (!isExpanded) setIsExpanded(true);
+
+    const now = new Date();
+    const userMsg: ChatMessage = { 
+      id: `u-${now.getTime()}`, 
+      role: 'user', 
+      content: text, 
+      createdAt: now 
+    };
+
+    const assistantMsgId = `a-${now.getTime() + 1}`;
+    const assistantMsg: ChatMessage = {
+      id: assistantMsgId,
+      role: 'assistant',
+      content: '',
+      createdAt: new Date(now.getTime() + 1),
+      isStreaming: true,
+    };
+
+    setMessages(prev => [...prev, userMsg, assistantMsg]);
+    setInputValue('');
+    setIsStreaming(true);
+    setError(null);
+
+    // Create abort controller for this request
+    abortControllerRef.current = new AbortController();
+
     try {
-      const res = await fetch(`/api/ai/chat?sessionId=${encodeURIComponent(sessionId)}`, { method: 'GET', cache: 'no-store' });
-      if (!res.ok) return;
-      const json = (await res.json()) as { messages?: ApiHistoryRow[] };
-      const rows = Array.isArray(json.messages) ? json.messages : [];
-      const mapped: ChatMessage[] = rows
-        .filter((r): r is ApiHistoryRow & { role: 'user' | 'assistant' } => isUiRole(r.role))
-        .map((r) => ({
-          id: r.id,
-          role: r.role,
-          content: r.content,
-          createdAt: new Date(r.created_at),
-          sources: (Array.isArray(r.sources) ? (r.sources as ChatSource[]) : undefined) || undefined,
-        }));
-      setMessages(mapped);
-    } catch { /* best-effort */ }
-  }, [sessionId]);
+      const response = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+        signal: abortControllerRef.current.signal,
+      });
 
-  useEffect(() => {
-    if (isOpen && isExpanded) void loadHistory();
-  }, [isOpen, isExpanded, loadHistory]);
-
-  const sendMessage = useCallback(
-    async (text: string) => {
-      if (!sessionId || !text.trim()) return;
-      if (isThinking) return;
-
-      if (!isExpanded) setIsExpanded(true);
-
-      const now = new Date();
-      const userMsg: ChatMessage = { id: `u-${now.getTime()}`, role: 'user', content: text, createdAt: now };
-      const assistantMsgId = `a-${now.getTime() + 1}`;
-      const assistantMsg: ChatMessage = {
-        id: assistantMsgId,
-        role: 'assistant',
-        content: '',
-        createdAt: new Date(now.getTime() + 1),
-        isStreaming: true,
-      };
-
-      setMessages((prev) => [...prev, userMsg, assistantMsg]);
-      setIsThinking(true);
-      setInputValue('');
-
-      let res: Response;
-      try {
-        res = await fetch('/api/ai/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, message: text }),
-        });
-      } catch (err) {
-        toast.error(`Chat failed: ${err instanceof Error ? err.message : 'Network error'}`);
-        setIsThinking(false);
-        setMessages((prev) => prev.map((m) => (m.id === assistantMsgId ? { ...m, isStreaming: false, content: 'Connection failed.' } : m)));
-        return;
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Chat request failed');
       }
 
-      if (!res.ok || !res.body) {
-        const errJson = (await res.json().catch(() => null)) as { error?: string } | null;
-        toast.error(`Chat failed: ${errJson?.error || `HTTP ${res.status}`}`);
-        setIsThinking(false);
-        setMessages((prev) => prev.map((m) => (m.id === assistantMsgId ? { ...m, isStreaming: false, content: errJson?.error || 'Error' } : m)));
-        return;
+      if (!response.body) {
+        throw new Error('No response body');
       }
 
-      const reader = res.body.getReader();
+      // Process SSE stream
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = '';
+      let accumulatedContent = '';
+      let sources: ChatSource[] = [];
 
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-          while (true) {
-            const sep = buffer.indexOf('\n\n');
-            if (sep === -1) break;
-            const raw = buffer.slice(0, sep);
-            buffer = buffer.slice(sep + 2);
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
 
-            const lines = raw.split('\n');
-            let event = '', data = '';
-            for (const line of lines) {
-              if (line.startsWith('event:')) event = line.slice(6).trim();
-              if (line.startsWith('data:')) data += line.slice(5).trim();
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            
+            if (data === '[DONE]') {
+              // Stream complete
+              break;
             }
 
-            if (event === 'token') {
-              const parsed = JSON.parse(data) as { delta?: string };
-              if (parsed.delta) {
-                setMessages((prev) => prev.map((m) => (m.id === assistantMsgId ? { ...m, content: (m.content || '') + parsed.delta } : m)));
+            try {
+              const parsed = JSON.parse(data);
+              
+              if (parsed.text) {
+                accumulatedContent += parsed.text;
+                
+                // Update the assistant message with accumulated content
+                setMessages(prev => prev.map(msg => 
+                  msg.id === assistantMsgId 
+                    ? { ...msg, content: accumulatedContent }
+                    : msg
+                ));
               }
-            } else if (event === 'done') {
-              const parsed = JSON.parse(data) as { sources?: ChatSource[] };
-              setMessages((prev) => prev.map((m) => (m.id === assistantMsgId ? { ...m, isStreaming: false, sources: parsed.sources || m.sources } : m)));
+
+              if (parsed.sources) {
+                sources = parsed.sources;
+              }
+            } catch {
+              // Skip invalid JSON lines (empty lines, etc.)
             }
           }
         }
-      } catch (err) {
-        toast.error(`Stream failed: ${err instanceof Error ? err.message : 'Error'}`);
-      } finally {
-        setIsThinking(false);
-        setMessages((prev) => prev.map((m) => (m.id === assistantMsgId ? { ...m, isStreaming: false } : m)));
       }
-    },
-    [sessionId, isThinking, isExpanded]
-  );
+
+      // Finalize the message
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMsgId 
+          ? { ...msg, content: accumulatedContent || 'I apologize, but I couldn\'t generate a response. Please try again.', isStreaming: false, sources }
+          : msg
+      ));
+
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        // Request was aborted, don't show error
+        return;
+      }
+
+      console.error('[OmniPanel] Chat error:', err);
+      const errorMessage = err instanceof Error ? err.message : 'An error occurred';
+      
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMsgId 
+          ? { ...msg, content: `Error: ${errorMessage}`, isStreaming: false }
+          : msg
+      ));
+
+      setError(errorMessage);
+      toast.error('Chat failed', { description: errorMessage });
+    } finally {
+      setIsStreaming(false);
+      abortControllerRef.current = null;
+    }
+  }, [isStreaming, isExpanded, hasConnections]);
+
+  // ============================================================================
+  // Handlers
+  // ============================================================================
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      void sendMessage(inputValue);
+      sendMessage(inputValue);
     }
   };
 
   const startNewChat = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
     setMessages([]);
-    const newId = window.crypto.randomUUID();
-    window.localStorage.setItem('eos_chat_session_id', newId);
-    setSessionId(newId);
+    setError(null);
   };
+
+  const handleQuickAction = (query: string) => {
+    sendMessage(query);
+  };
+
+  // ============================================================================
+  // Render
+  // ============================================================================
 
   if (!isOpen) return null;
 
@@ -219,7 +267,9 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
             </div>
             <div>
               <h2 className="font-medium text-sm text-foreground">Assistant</h2>
-              <p className="text-[10px] text-muted-foreground">AI-powered help</p>
+              <p className="text-[10px] text-muted-foreground">
+                {hasConnections ? 'AI-powered help' : 'Connect data sources to chat'}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -227,6 +277,7 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
               variant="ghost"
               size="sm"
               onClick={startNewChat}
+              disabled={isStreaming}
               className="h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground"
             >
               <Plus className="h-3 w-3 mr-1" />
@@ -246,80 +297,15 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
         {/* Messages Area */}
         <div className="h-[340px] overflow-y-auto px-4 py-4 eos-scrollbar">
           {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center px-4">
-              <div className="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center mb-4">
-                <Bot className="h-6 w-6 text-amber-500" />
-              </div>
-              
-              <h3 className="text-sm font-medium text-foreground mb-1">How can I help?</h3>
-              <p className="text-xs text-muted-foreground mb-5">
-                Ask about emails, calendar, or documents.
-              </p>
-              
-              {/* Quick Actions */}
-              <div className="flex flex-col gap-2 w-full max-w-[280px]">
-                {QUICK_ACTIONS.map((action) => (
-                  <button
-                    key={action.label}
-                    onClick={() => void sendMessage(action.query)}
-                    className="flex items-center gap-2.5 px-3 py-2.5 text-xs text-foreground bg-secondary/50 hover:bg-secondary border border-border/50 rounded-lg transition-colors text-left"
-                  >
-                    <action.icon className={cn('h-4 w-4 shrink-0', action.color)} />
-                    <span>{action.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
+            <EmptyChat 
+              hasConnections={hasConnections} 
+              onQuickAction={handleQuickAction}
+            />
           ) : (
             <div className="space-y-4">
               {messages.map((msg) => (
-                <div key={msg.id} className={cn('flex gap-2.5', msg.role === 'user' && 'flex-row-reverse')}>
-                  <div className={cn(
-                    'h-7 w-7 rounded-lg flex items-center justify-center shrink-0',
-                    msg.role === 'user' 
-                      ? 'bg-teal-500' 
-                      : 'bg-gradient-to-br from-amber-500 to-orange-500'
-                  )}>
-                    {msg.role === 'user' ? <User className="h-3.5 w-3.5 text-white" /> : <Bot className="h-3.5 w-3.5 text-white" />}
-                  </div>
-                  <div className={cn(
-                    'max-w-[85%] rounded-lg px-3 py-2',
-                    msg.role === 'user' 
-                      ? 'bg-teal-500 text-white' 
-                      : 'bg-secondary/70 text-foreground'
-                  )}>
-                    <p className={cn('text-xs leading-relaxed whitespace-pre-wrap', msg.isStreaming && 'animate-pulse')}>
-                      {msg.content || '…'}
-                    </p>
-                    {msg.sources && msg.sources.length > 0 && (
-                      <div className="mt-2 pt-2 border-t border-border/30 flex flex-wrap gap-1">
-                        {msg.sources.map((s, i) => (
-                          <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-background/50 text-muted-foreground">
-                            {s.title || s.kind}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <MessageBubble key={msg.id} message={msg} />
               ))}
-              {isThinking && messages[messages.length - 1]?.role !== 'assistant' && (
-                <div className="flex gap-2.5">
-                  <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
-                    <Bot className="h-3.5 w-3.5 text-white" />
-                  </div>
-                  <div className="bg-secondary/70 rounded-lg px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <div className="flex gap-0.5">
-                        <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                        <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                        <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                      </div>
-                      <span className="text-[10px] text-muted-foreground">Thinking</span>
-                    </div>
-                  </div>
-                </div>
-              )}
               <div ref={bottomRef} />
             </div>
           )}
@@ -327,24 +313,34 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
 
         {/* Input Area in Expanded View */}
         <div className="px-4 py-3 border-t border-border bg-secondary/20">
+          {error && (
+            <div className="flex items-center gap-2 mb-2 p-2 rounded-lg bg-red-500/10 border border-red-500/20">
+              <AlertCircle className="h-3 w-3 text-red-400 shrink-0" />
+              <span className="text-xs text-red-400">{error}</span>
+            </div>
+          )}
           <div className="flex items-end gap-2 bg-background border border-border rounded-lg px-3 py-2 focus-within:border-teal-500/50 transition-colors">
             <textarea
               ref={expandedInputRef}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Ask anything..."
-              className="flex-1 bg-transparent text-foreground text-xs placeholder-muted-foreground focus:outline-none resize-none min-h-[20px] max-h-[80px]"
+              placeholder={hasConnections ? "Ask anything..." : "Connect data sources to chat"}
+              disabled={!hasConnections || isStreaming}
+              className="flex-1 bg-transparent text-foreground text-xs placeholder-muted-foreground focus:outline-none resize-none min-h-[20px] max-h-[80px] disabled:opacity-50"
               rows={1}
-              disabled={isThinking}
             />
             <Button
               size="sm"
-              onClick={() => void sendMessage(inputValue)}
-              disabled={isThinking || !inputValue.trim()}
+              onClick={() => sendMessage(inputValue)}
+              disabled={!inputValue.trim() || isStreaming || !hasConnections}
               className="h-7 w-7 p-0 rounded-md bg-teal-500 hover:bg-teal-600 disabled:opacity-40"
             >
-              {isThinking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+              {isStreaming ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+              <Send className="h-3.5 w-3.5" />
+              )}
             </Button>
           </div>
         </div>
@@ -366,19 +362,23 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask anything..."
-          className="flex-1 min-w-0 bg-transparent text-foreground text-xs placeholder-muted-foreground focus:outline-none"
-          disabled={isThinking}
+          placeholder={hasConnections ? "Ask anything..." : "Connect data sources to chat"}
+          disabled={!hasConnections || isStreaming}
+          className="flex-1 min-w-0 bg-transparent text-foreground text-xs placeholder-muted-foreground focus:outline-none disabled:opacity-50"
         />
         
         {/* Send button */}
         <Button
           size="sm"
-          onClick={() => void sendMessage(inputValue)}
-          disabled={isThinking || !inputValue.trim()}
+          onClick={() => sendMessage(inputValue)}
+          disabled={!inputValue.trim() || isStreaming || !hasConnections}
           className="h-8 w-8 p-0 rounded-md bg-teal-500 hover:bg-teal-600 disabled:opacity-40 shrink-0"
         >
-          {isThinking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+          {isStreaming ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+          <Send className="h-3.5 w-3.5" />
+          )}
         </Button>
         
         {/* Expand button */}
@@ -405,7 +405,108 @@ export function OmniPanel({ isOpen, onClose }: OmniPanelProps) {
   );
 }
 
-// Minimized Avatar Button
+// ============================================================================
+// Sub-Components
+// ============================================================================
+
+function MessageBubble({ message }: { message: ChatMessage }) {
+  const isUser = message.role === 'user';
+
+  return (
+    <div className={cn('flex gap-2.5', isUser && 'flex-row-reverse')}>
+      <div className={cn(
+        'h-7 w-7 rounded-lg flex items-center justify-center shrink-0',
+        isUser 
+          ? 'bg-teal-500' 
+          : 'bg-gradient-to-br from-amber-500 to-orange-500'
+      )}>
+        {isUser ? (
+          <User className="h-3.5 w-3.5 text-white" />
+        ) : (
+          <Bot className="h-3.5 w-3.5 text-white" />
+        )}
+      </div>
+      <div className={cn(
+        'max-w-[85%] rounded-lg px-3 py-2',
+        isUser 
+          ? 'bg-teal-500 text-white' 
+          : 'bg-secondary/70 text-foreground'
+      )}>
+        <p className="text-xs leading-relaxed whitespace-pre-wrap">
+          {message.content || (message.isStreaming ? '…' : '')}
+          {message.isStreaming && (
+            <span className="inline-block w-1.5 h-3 bg-current ml-0.5 animate-pulse" />
+          )}
+        </p>
+        {message.sources && message.sources.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-border/30">
+            <p className="text-[10px] text-muted-foreground/70 mb-1">Sources:</p>
+            <div className="flex flex-wrap gap-1">
+              {message.sources.map((source, idx) => (
+                <span 
+                  key={idx} 
+                  className={cn(
+                    'text-[9px] px-1.5 py-0.5 rounded',
+                    source.kind === 'email' && 'bg-rose-500/15 text-rose-400',
+                    source.kind === 'event' && 'bg-sky-500/15 text-sky-400',
+                    source.kind === 'document' && 'bg-emerald-500/15 text-emerald-400',
+                    source.kind === 'briefing' && 'bg-amber-500/15 text-amber-400'
+                  )}
+                >
+                  {source.title}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmptyChat({ 
+  hasConnections, 
+  onQuickAction 
+}: { 
+  hasConnections: boolean;
+  onQuickAction: (query: string) => void;
+}) {
+  return (
+    <div className="h-full flex flex-col items-center justify-center text-center px-4">
+      <div className="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center mb-4">
+        <Bot className="h-6 w-6 text-amber-500" />
+      </div>
+      
+      <h3 className="text-sm font-medium text-foreground mb-1">How can I help?</h3>
+      <p className="text-xs text-muted-foreground mb-5">
+        {hasConnections 
+          ? 'Ask about emails, calendar, or documents.'
+          : 'Connect your data sources in Settings to start chatting.'}
+      </p>
+      
+      {/* Quick Actions */}
+      {hasConnections && (
+        <div className="flex flex-col gap-2 w-full max-w-[280px]">
+          {QUICK_ACTIONS.map((action) => (
+            <button
+              key={action.label}
+              onClick={() => onQuickAction(action.query)}
+              className="flex items-center gap-2.5 px-3 py-2.5 text-xs text-foreground bg-secondary/50 hover:bg-secondary border border-border/50 rounded-lg transition-colors text-left"
+            >
+              <action.icon className={cn('h-4 w-4 shrink-0', action.color)} />
+              <span>{action.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// Minimized Button
+// ============================================================================
+
 export function OmniPanelButton({ onClick }: { onClick: () => void }) {
   return (
     <button

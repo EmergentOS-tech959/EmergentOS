@@ -1,197 +1,188 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { Nango } from '@nangohq/node';
+/**
+ * EmergentOS - Nango Webhook Handler
+ * 
+ * Receives webhook events from Nango when OAuth connections are established.
+ * Per Section 5: Connection Flow: Initial Connect
+ */
+
+import { NextResponse } from 'next/server';
+import { createHmac } from 'crypto';
+import { supabase } from '@/lib/supabase';
 import { inngest } from '@/lib/inngest';
-import { supabaseAdmin } from '@/lib/supabase-server';
-import type { Database } from '@/types';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { PROVIDER_FROM_CONFIG_KEY, type ConfigKey } from '@/lib/nango';
+
+// Nango webhook payload structure
+interface NangoWebhookPayload {
+  type: 'auth' | 'sync' | 'forward';
+  connectionId: string;
+  providerConfigKey: string;
+  provider?: string;
+  environment?: string;
+  success?: boolean;
+  operation?: string;
+  endUser?: {
+    id: string;
+    email?: string;
+  };
+  error?: {
+    type: string;
+    message: string;
+  };
+}
 
 /**
- * POST /api/nango/webhook
- * Receives webhook events from Nango
- * 
- * Since Nango generates its own connection IDs, we need to:
- * 1. Get the connectionId from the webhook
- * 2. Query Nango to get the end_user.id (our Clerk user ID)
- * 3. Use Clerk user ID for Supabase, connectionId for Nango API calls
+ * Validate Nango webhook signature (if secret is configured)
  */
-export async function POST(req: NextRequest) {
+function validateSignature(body: string, signature: string | null, secret: string | null): boolean {
+  if (!secret || !signature) {
+    // If no secret configured, skip validation (for development)
+    return true;
+  }
+  
+  const expectedSig = createHmac('sha256', secret)
+    .update(body)
+    .digest('hex');
+  
+  return signature === expectedSig;
+}
+
+export async function POST(request: Request) {
+  let bodyText: string;
+  let payload: NangoWebhookPayload;
+  
   try {
-    const payload = await req.json();
-    
-    console.log('=== NANGO WEBHOOK FULL PAYLOAD ===');
-    console.log(JSON.stringify(payload, null, 2));
-    console.log('=== END PAYLOAD ===');
-
-    // Handle auth webhook (new connection established)
-    if (payload.type === 'auth') {
-      const { connectionId, providerConfigKey, provider } = payload;
-      
-      // Try to get Clerk userId from end_user.id (this is what we set in createConnectSession)
-      let clerkUserId = 
-        payload.endUser?.id || 
-        payload.end_user?.id || 
-        payload.data?.endUser?.id ||
-        payload.data?.end_user?.id;
-      
-      console.log('=== EXTRACTED FROM PAYLOAD ===');
-      console.log('connectionId:', connectionId);
-      console.log('clerkUserId from payload:', clerkUserId);
-      
-      // If not in payload, query Nango to get the connection details (authoritative)
-      if (!clerkUserId && connectionId && process.env.NANGO_SECRET_KEY) {
-        try {
-          console.log('Fetching connection details from Nango...');
-          const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY });
-          const connection = await nango.getConnection(
-            providerConfigKey || 'google-mail',
-            connectionId
-          );
-          
-          console.log('Nango connection details:', JSON.stringify(connection, null, 2));
-          
-          // The end_user.id should be in the connection metadata
-          const conn = connection as Record<string, unknown>;
-          const endUser = conn.end_user as Record<string, unknown> | undefined;
-          const endUserAlt = conn.endUser as Record<string, unknown> | undefined;
-          const metadata = conn.metadata as Record<string, unknown> | undefined;
-          clerkUserId = endUser?.id as string | undefined || 
-                        endUserAlt?.id as string | undefined ||
-                        metadata?.clerk_user_id as string | undefined;
-          
-          console.log('clerkUserId from Nango API:', clerkUserId);
-        } catch (nangoError) {
-          console.error('Failed to fetch connection from Nango:', nangoError);
-        }
-      }
-      
-      // If we still don't have a Clerk userId, we cannot safely associate the connection.
-      if (!clerkUserId) {
-        console.error('Unable to determine Clerk userId for connection; refusing to persist mapping.', {
-          connectionId,
-          providerConfigKey,
-          provider,
-        });
-        return NextResponse.json({ received: true, error: 'Missing end_user.id' });
-      }
-      const finalUserId = clerkUserId;
-      
-      console.log('=== FINAL IDs ===');
-      console.log('finalUserId (for Supabase):', finalUserId);
-      console.log('connectionId (for Nango):', connectionId);
-      console.log('===================');
-      
-      const providerKey = providerConfigKey || provider;
-
-      const upsertConnection = async (providerName: string) => {
-        type ConnectionInsert = Database['public']['Tables']['connections']['Insert'];
-        const now = new Date().toISOString();
-        const payload: ConnectionInsert = {
-          user_id: String(finalUserId),
-          provider: providerName,
-          connection_id: String(connectionId),
-          status: 'connected',
-          metadata: { clerk_user_id: String(finalUserId) },
-          updated_at: now,
-          // NOTE: Do NOT set last_sync_at here! 
-          // The Inngest function will set it AFTER successful data sync.
-          // Setting it here causes delta sync to find 0 emails (since no emails after "now").
-        };
-
-        const connectionsClient = supabaseAdmin as SupabaseClient<Database>;
-        const tableName: keyof Database['public']['Tables'] = 'connections';
-        // Also repair any legacy row that used a non-Clerk user_id for this same connection_id.
-        await connectionsClient
-          .from(tableName)
-          // Type casting to satisfy Supabase typed client for custom schema
-          .update({ user_id: String(finalUserId), metadata: { clerk_user_id: String(finalUserId) } } as unknown as never)
-          .eq('connection_id', String(connectionId))
-          .eq('provider', providerName);
-        const { error: connError } = await connectionsClient
-          .from(tableName)
-          // Type casting to satisfy Supabase typed client for custom schema
-          .upsert(payload as unknown as never, { onConflict: 'user_id,provider' });
-        if (connError) {
-          console.error(`Failed to upsert connection for ${providerName}`, connError);
-        }
-      };
-
-      if (providerKey === 'google-mail') {
-        await upsertConnection('gmail');
-        console.log(`Gmail connected - Clerk userId: ${finalUserId}, Nango connectionId: ${connectionId}`);
-        await inngest.send({
-          name: 'gmail/connection.established',
-          data: {
-            userId: finalUserId,
-            connectionId,
-            providerConfigKey: providerKey,
-            timestamp: new Date().toISOString(),
-          },
-        });
-        console.log('Inngest event sent: gmail/connection.established');
-      }
-
-      if (providerKey === 'google-calendar') {
-        await upsertConnection('calendar');
-        console.log(`Calendar connected - Clerk userId: ${finalUserId}, Nango connectionId: ${connectionId}`);
-        await inngest.send({
-          name: 'calendar/connection.established',
-          data: {
-            userId: finalUserId,
-            connectionId,
-            providerConfigKey: providerKey,
-            timestamp: new Date().toISOString(),
-          },
-        });
-        console.log('Inngest event sent: calendar/connection.established');
-      }
-
-      if (providerKey === 'google-drive') {
-        await upsertConnection('drive');
-        console.log(`Drive connected - Clerk userId: ${finalUserId}, Nango connectionId: ${connectionId}`);
-        await inngest.send({
-          name: 'drive/connection.established',
-          data: {
-            userId: finalUserId,
-            connectionId,
-            providerConfigKey: providerKey,
-            timestamp: new Date().toISOString(),
-          },
-        });
-        console.log('Inngest event sent: drive/connection.established');
-      }
-    }
-
-    // Handle sync webhook (data sync completed)
-    if (payload.type === 'sync') {
-      console.log('Sync webhook received (not handled in Phase 0)');
-    }
-
-    // Handle forward webhook (new data from integration)
-    if (payload.type === 'forward') {
-      console.log('Forward webhook received (not handled in Phase 0)');
-    }
-
-    return NextResponse.json({ 
-      received: true,
-      type: payload.type,
-      timestamp: new Date().toISOString(),
+    // Read body as text for signature validation
+    bodyText = await request.text();
+    payload = JSON.parse(bodyText);
+  } catch {
+    console.error('[Nango Webhook] Failed to parse request body');
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+  
+  // Validate webhook signature (if configured)
+  const signature = request.headers.get('x-nango-signature');
+  const secret = process.env.NANGO_WEBHOOK_SECRET || null;
+  
+  if (!validateSignature(bodyText, signature, secret)) {
+    console.error('[Nango Webhook] Invalid signature');
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+  }
+  
+  console.log('[Nango Webhook] Received:', {
+    type: payload.type,
+    providerConfigKey: payload.providerConfigKey,
+    connectionId: payload.connectionId,
+    endUserId: payload.endUser?.id,
+    success: payload.success
+  });
+  
+  // Only process successful auth events
+  if (payload.type !== 'auth' || !payload.success) {
+    console.log('[Nango Webhook] Ignoring non-auth or failed event');
+    return NextResponse.json({ received: true });
+  }
+  
+  // Extract and validate required fields
+  const { connectionId, providerConfigKey, endUser } = payload;
+  
+  if (!connectionId || !providerConfigKey || !endUser?.id) {
+    console.error('[Nango Webhook] Missing required fields:', {
+      connectionId,
+      providerConfigKey,
+      endUserId: endUser?.id
     });
-
+    return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+  }
+  
+  // Map Nango config key to our provider name
+  const provider = PROVIDER_FROM_CONFIG_KEY[providerConfigKey as ConfigKey];
+  
+  if (!provider) {
+    console.error('[Nango Webhook] Unknown provider config key:', providerConfigKey);
+    return NextResponse.json({ error: 'Unknown provider' }, { status: 400 });
+  }
+  
+  const userId = endUser.id;
+  
+  try {
+    // STEP 3A: UPSERT connection with last_sync_at = NULL (CRITICAL!)
+    // Per Section 5.2: This must be NULL, not current time
+    const { data: connection, error: connectionError } = await supabase
+      .from('connections')
+      .upsert({
+        user_id: userId,
+        provider: provider,
+        connection_id: connectionId,
+        status: 'connected',
+        last_sync_at: null,  // CRITICAL: NULL for initial sync
+        metadata: { 
+          clerk_user_id: userId,
+          nango_provider_config_key: providerConfigKey
+        },
+        updated_at: new Date().toISOString()
+      }, { 
+        onConflict: 'user_id,provider' 
+      })
+      .select()
+      .single();
+    
+    if (connectionError) {
+      console.error('[Nango Webhook] Failed to upsert connection:', connectionError);
+      return NextResponse.json({ error: 'Database error' }, { status: 500 });
+    }
+    
+    console.log('[Nango Webhook] Connection upserted:', {
+      connectionId: connection.id,
+      provider,
+      userId
+    });
+    
+    // STEP 3A: Create sync_job BEFORE sending Inngest event
+    const jobId = crypto.randomUUID();
+    const idempotencyKey = `connect-${userId}-${provider}-${Date.now()}`;
+    
+    const { error: jobError } = await supabase
+      .from('sync_jobs')
+      .insert({
+        id: jobId,
+        user_id: userId,
+        provider: provider,
+        trigger: 'connect',
+        idempotency_key: idempotencyKey,
+        status: 'pending',
+        started_at: new Date().toISOString()
+      });
+    
+    if (jobError) {
+      console.error('[Nango Webhook] Failed to create sync job:', jobError);
+      // Continue anyway - Inngest can still process
+    } else {
+      console.log('[Nango Webhook] Sync job created:', jobId);
+    }
+    
+    // STEP 3A: Send Inngest event with jobId
+    await inngest.send({
+      name: `${provider}/sync.requested`,
+      data: {
+        userId,
+        connectionId: connection.id,
+        trigger: 'connect',
+        idempotencyKey,
+        jobId
+      }
+    });
+    
+    console.log('[Nango Webhook] Inngest event sent:', `${provider}/sync.requested`);
+    
+    return NextResponse.json({ received: true });
+    
   } catch (error) {
-    console.error('Nango webhook error:', error);
-    
-    // Still return 200 to prevent Nango from retrying
-    return NextResponse.json({ 
-      received: true, 
-      error: 'Processing error logged' 
-    });
+    console.error('[Nango Webhook] Unexpected error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-// Also handle GET for webhook verification
-export async function GET() {
-  return NextResponse.json({ 
-    status: 'Nango webhook endpoint active',
-    timestamp: new Date().toISOString(),
-  });
+// Handle OPTIONS for CORS (if needed)
+export async function OPTIONS() {
+  return NextResponse.json({}, { status: 200 });
 }

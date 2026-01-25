@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { Sidebar } from './sidebar';
@@ -15,13 +15,38 @@ interface AppShellProps {
   children: React.ReactNode;
 }
 
+const SIDEBAR_COLLAPSED_KEY = 'emergent-sidebar-collapsed';
+
 export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    // Initialize from localStorage if available (only on client)
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(SIDEBAR_COLLAPSED_KEY);
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    }
+    return false;
+  });
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isOmniPanelOpen, setIsOmniPanelOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const userHasToggledRef = useRef(false);
+
+  // Persist sidebar collapsed state to localStorage
+  useEffect(() => {
+    if (userHasToggledRef.current) {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(isSidebarCollapsed));
+    }
+  }, [isSidebarCollapsed]);
+
+  // Handle sidebar toggle (user action)
+  const handleSidebarToggle = useCallback(() => {
+    userHasToggledRef.current = true;
+    setIsSidebarCollapsed(prev => !prev);
+  }, []);
 
   // Close mobile nav on route change
   useEffect(() => {
@@ -43,6 +68,7 @@ export function AppShell({ children }: AppShellProps) {
       // CMD+B - Toggle sidebar
       if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
         e.preventDefault();
+        userHasToggledRef.current = true;
         setIsSidebarCollapsed(prev => !prev);
       }
 
@@ -70,17 +96,13 @@ export function AppShell({ children }: AppShellProps) {
     return () => window.removeEventListener('open-omni-panel', handleOpenOmniPanel as EventListener);
   }, []);
 
-  // Responsive sidebar collapse
+  // Responsive sidebar collapse - only auto-collapse on initial load if no user preference
   useEffect(() => {
-    const handleResize = () => {
-      if (window.innerWidth < 1024) {
+    // Only auto-collapse if user hasn't manually toggled and no saved preference
+    const saved = localStorage.getItem(SIDEBAR_COLLAPSED_KEY);
+    if (saved === null && !userHasToggledRef.current && window.innerWidth < 1024) {
         setIsSidebarCollapsed(true);
       }
-    };
-
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   const handleOpenCommandPalette = useCallback(() => {
@@ -94,7 +116,7 @@ export function AppShell({ children }: AppShellProps) {
         <div className="hidden md:block">
           <Sidebar
             isCollapsed={isSidebarCollapsed}
-            onToggle={() => setIsSidebarCollapsed(prev => !prev)}
+            onToggle={handleSidebarToggle}
             onOpenCommandPalette={handleOpenCommandPalette}
           />
         </div>
@@ -110,8 +132,8 @@ export function AppShell({ children }: AppShellProps) {
         <div
           className={cn(
             'flex flex-col min-h-screen transition-all duration-300',
-            'md:ml-60',
-            isSidebarCollapsed && 'md:ml-16'
+            'md:ml-[260px]',
+            isSidebarCollapsed && 'md:ml-[68px]'
           )}
         >
           <Header
@@ -119,7 +141,7 @@ export function AppShell({ children }: AppShellProps) {
             onOpenMobileNav={() => setIsMobileNavOpen(true)}
           />
 
-          <main className="flex-1 p-4 md:p-6">
+          <main className="flex-1 p-4 lg:p-5 overflow-hidden">
             {children}
           </main>
         </div>

@@ -63,7 +63,6 @@ export function CalendarModal({
   onClose,
   events,
   onEventCreate,
-  onEventUpdate,
   onEventDelete,
   isConnected,
   lastSyncDisplay,
@@ -126,18 +125,9 @@ export function CalendarModal({
         endDateTime.setDate(endDateTime.getDate() + 1);
       }
       
-      if (editingEvent && onEventUpdate) {
-        // Update existing event
-        await onEventUpdate(editingEvent.id, {
-          title: formData.title,
-          start_time: startDateTime.toISOString(),
-          end_time: endDateTime.toISOString(),
-          location: formData.location || undefined,
-          description: formData.description || undefined,
-        });
-        toast.success('Event updated');
+      if (editingEvent) {
+        toast.info('Editing events is not yet supported');
       } else if (onEventCreate) {
-        // Create new event
         await onEventCreate({
           title: formData.title,
           start_time: startDateTime.toISOString(),

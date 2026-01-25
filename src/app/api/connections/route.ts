@@ -1,56 +1,75 @@
+/**
+ * EmergentOS - Connections API
+ * 
+ * Returns all OAuth connections for the authenticated user.
+ * Per Section 8.2: GET /api/connections
+ */
+
 import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { supabaseAdmin } from '@/lib/supabase-server';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabase';
 
-type Provider = 'gmail' | 'calendar' | 'drive';
-
-type ConnectionRow = {
-  provider?: string;
-  status?: string | null;
-  last_sync_at?: string | null;
-  updated_at?: string | null;
-  connection_id?: string | null;
-};
-
-export async function GET() {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const supa = supabaseAdmin as unknown as SupabaseClient;
-  const { data, error } = await supa
-    .from('connections')
-    .select('provider,status,last_sync_at,updated_at,connection_id')
-    .or(`user_id.eq.${userId},metadata->>clerk_user_id.eq.${userId}`)
-    .order('updated_at', { ascending: false });
-
-  if (error) {
-    console.error('Failed to load connections', error);
-    return NextResponse.json({ error: 'Failed to load connections' }, { status: 500 });
-  }
-
-  const defaults: Record<Provider, { status: 'connected' | 'disconnected' | 'error'; lastSyncAt: string | null }> = {
-    gmail: { status: 'disconnected', lastSyncAt: null },
-    calendar: { status: 'disconnected', lastSyncAt: null },
-    drive: { status: 'disconnected', lastSyncAt: null },
-  };
-
-  // DEBUG: Log raw data from database
-  console.log('[/api/connections] Raw data from DB:', JSON.stringify(data));
-  
-  const seen = new Set<Provider>();
-  for (const row of (data || []) as unknown as ConnectionRow[]) {
-    const p = row.provider as Provider | undefined;
-    if (!p || !(p in defaults)) continue;
-    if (seen.has(p)) continue; // keep most-recent row per provider
-    seen.add(p);
-    const s = row.status === 'connected' ? 'connected' : row.status === 'error' ? 'error' : 'disconnected';
-    defaults[p] = { status: s, lastSyncAt: row.last_sync_at ?? null };
-  }
-
-  // DEBUG: Log final result
-  console.log('[/api/connections] Returning:', JSON.stringify(defaults));
-  
-  return NextResponse.json({ connections: defaults });
+// Response shape per Section 17: ConnectionStatus
+interface ConnectionStatus {
+  status: 'connected' | 'disconnected' | 'error';
+  lastSyncAt: string | null;
+  error: string | null;
 }
 
+type ProviderKey = 'gmail' | 'calendar' | 'drive';
+
+export async function GET() {
+  try {
+    // Authenticate with Clerk
+    const { userId } = await auth();
+    
+    if (!userId) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+    
+    // Fetch all connections for this user
+    const { data: connections, error } = await supabase
+      .from('connections')
+      .select('provider, status, last_sync_at, metadata')
+      .eq('user_id', userId);
+    
+    if (error) {
+      console.error('[Connections API] Database error:', error);
+      return NextResponse.json(
+        { error: 'Database error' },
+        { status: 500 }
+      );
+    }
+    
+    // Initialize all providers as disconnected
+    const result: Record<ProviderKey, ConnectionStatus> = {
+      gmail: { status: 'disconnected', lastSyncAt: null, error: null },
+      calendar: { status: 'disconnected', lastSyncAt: null, error: null },
+      drive: { status: 'disconnected', lastSyncAt: null, error: null }
+    };
+    
+    // Override with actual connection data
+    for (const conn of connections || []) {
+      const provider = conn.provider as ProviderKey;
+      if (provider in result) {
+        result[provider] = {
+          status: conn.status as ConnectionStatus['status'],
+          lastSyncAt: conn.last_sync_at || null,
+          error: (conn.metadata as Record<string, unknown>)?.error_reason as string || null
+        };
+      }
+    }
+    
+    return NextResponse.json({ connections: result });
+    
+  } catch (error) {
+    console.error('[Connections API] Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}

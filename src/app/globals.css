@@ -854,3 +854,160 @@
 .empty-state-description {
   @apply text-sm text-muted-foreground max-w-sm mb-6;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Onboarding Flow Styles
+═══════════════════════════════════════════════════════════════ */
+
+/* Onboarding scrollbar - custom styling */
+.onboarding-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.onboarding-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.onboarding-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(78, 205, 196, 0.2);
+  border-radius: 9999px;
+  transition: background 0.2s;
+}
+
+.onboarding-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(78, 205, 196, 0.4);
+}
+
+/* Onboarding animations */
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+@keyframes ring-spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ring-spin-reverse-slow {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes gradient-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes shimmer-slow {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes typing-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 3s ease-in-out infinite;
+}
+
+.animate-ring-spin-slow {
+  animation: ring-spin-slow 20s linear infinite;
+}
+
+.animate-ring-spin-reverse-slow {
+  animation: ring-spin-reverse-slow 15s linear infinite;
+}
+
+.animate-gradient-flow {
+  background-size: 200% 200%;
+  animation: gradient-flow 4s ease infinite;
+}
+
+.animate-shimmer-slow {
+  animation: shimmer-slow 2.5s ease-in-out infinite;
+}
+
+.animate-message-in {
+  animation: message-in 0.3s ease-out forwards;
+}
+
+/* Typing indicator dots */
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  background: rgba(78, 205, 196, 0.6);
+  border-radius: 50%;
+  animation: typing-bounce 1.2s ease-in-out infinite;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+/* Onboarding container background */
+.onboarding-bg {
+  background: 
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(78, 205, 196, 0.08), transparent 50%),
+    radial-gradient(ellipse 60% 40% at 80% 80%, rgba(210, 150, 116, 0.05), transparent),
+    var(--background);
+}
+
+/* Chat message bubbles */
+.message-bubble-assistant {
+  background: linear-gradient(135deg, rgba(26, 31, 40, 0.9), rgba(26, 31, 40, 0.7));
+  border: 1px solid rgba(78, 205, 196, 0.1);
+  backdrop-filter: blur(8px);
+}
+
+.message-bubble-user {
+  background: linear-gradient(135deg, rgba(78, 205, 196, 0.9), rgba(78, 205, 196, 0.75));
+  border: 1px solid rgba(78, 205, 196, 0.3);
+}
