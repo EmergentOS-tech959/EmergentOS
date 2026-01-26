@@ -103,6 +103,7 @@ interface SyncManagerContextValue extends SyncManagerState {
   syncProvider: (provider: ProviderKey, options?: { trigger?: SyncTrigger }) => Promise<void>;
   refreshConnections: () => Promise<void>;
   startProviderSync: (provider: ProviderKey) => void;
+  stopProviderSync: (provider: ProviderKey) => void;
   onProviderConnected: (provider: ProviderKey) => Promise<void>;
   onProviderDisconnected: (provider: ProviderKey) => Promise<void>;
 }
@@ -134,6 +135,15 @@ function generateId(): string {
 }
 
 // ============================================================================
+// Module-Level Syncing State (Persists across component remounts)
+// ============================================================================
+// CRITICAL: This MUST be outside the component to survive remounts during navigation.
+// useRef does NOT persist across remounts - it creates a new instance each time.
+// This module-level Set is the ONLY reliable way to track syncing state across
+// page navigations in Next.js.
+const globalSyncingProviders = new Set<ProviderKey>();
+
+// ============================================================================
 // SyncManager Provider
 // ============================================================================
 
@@ -149,6 +159,8 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
   });
   const [isInitialized, setIsInitialized] = useState(false);
   const [nextAutoSyncAt, setNextAutoSyncAt] = useState<Date | null>(null);
+  // Tick counter for real-time timestamp updates (increments every 30 seconds)
+  const [tick, setTick] = useState(0);
 
   // ---- Refs (Per Section 11.2) ----
   const queueRef = useRef<SyncRequest[]>([]);
@@ -156,12 +168,17 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
   const lastSyncDateUTCRef = useRef<string | null>(null);
   const notifiedEventIdsRef = useRef<Set<string>>(new Set());
   const autoSyncTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // NOTE: Syncing state is tracked in globalSyncingProviders (module-level)
+  // NOT in a ref, because refs reset on component remount during navigation.
 
   // ---- Derived State ----
   const isSyncing = Object.values(providers).some(p => p.isSyncing);
   const queueLength = queueRef.current.length;
 
   const displayStrings = useMemo<DisplayStrings>(() => {
+    // tick is included to force recalculation every 30 seconds for real-time timestamps
+    void tick;
+    
     const formatProvider = (p: ProviderState): string => {
       if (p.status === 'error') return 'Error';
       if (!p.lastSyncAt) return 'Never synced';
@@ -183,7 +200,7 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       calendar: formatProvider(providers.calendar),
       drive: formatProvider(providers.drive),
     };
-  }, [providers]);
+  }, [providers, tick]);
 
   const globalLastSync = useMemo(() => {
     const allSyncTimes = [providers.gmail, providers.calendar, providers.drive]
@@ -238,6 +255,7 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
 
   /**
    * Fetch connection status from /api/connections
+   * Preserves syncing state from globalSyncingProviders (module-level) to persist across navigation
    */
   const fetchConnections = useCallback(async (): Promise<Record<ProviderKey, ProviderState>> => {
     try {
@@ -247,32 +265,38 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       }
       const { connections } = await response.json();
       
+      // Preserve syncing state from ref (persists across page navigation)
+      const isSyncingGmail = globalSyncingProviders.has('gmail');
+      const isSyncingCalendar = globalSyncingProviders.has('calendar');
+      const isSyncingDrive = globalSyncingProviders.has('drive');
+      
       return {
         gmail: {
-          status: connections.gmail?.status || 'disconnected',
+          status: isSyncingGmail ? 'connected' : (connections.gmail?.status || 'disconnected'),
           lastSyncAt: connections.gmail?.lastSyncAt || null,
-          isSyncing: false,
+          isSyncing: isSyncingGmail,
           error: connections.gmail?.error,
         },
         calendar: {
-          status: connections.calendar?.status || 'disconnected',
+          status: isSyncingCalendar ? 'connected' : (connections.calendar?.status || 'disconnected'),
           lastSyncAt: connections.calendar?.lastSyncAt || null,
-          isSyncing: false,
+          isSyncing: isSyncingCalendar,
           error: connections.calendar?.error,
         },
         drive: {
-          status: connections.drive?.status || 'disconnected',
+          status: isSyncingDrive ? 'connected' : (connections.drive?.status || 'disconnected'),
           lastSyncAt: connections.drive?.lastSyncAt || null,
-          isSyncing: false,
+          isSyncing: isSyncingDrive,
           error: connections.drive?.error,
         },
       };
     } catch (error) {
       console.error('[SyncManager] Failed to fetch connections:', error);
+      // Still preserve syncing state even on error
       return {
-        gmail: { status: 'disconnected', lastSyncAt: null, isSyncing: false },
-        calendar: { status: 'disconnected', lastSyncAt: null, isSyncing: false },
-        drive: { status: 'disconnected', lastSyncAt: null, isSyncing: false },
+        gmail: { status: 'disconnected', lastSyncAt: null, isSyncing: globalSyncingProviders.has('gmail') },
+        calendar: { status: 'disconnected', lastSyncAt: null, isSyncing: globalSyncingProviders.has('calendar') },
+        drive: { status: 'disconnected', lastSyncAt: null, isSyncing: globalSyncingProviders.has('drive') },
       };
     }
   }, []);
@@ -379,6 +403,12 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
         phase: 'start',
       });
 
+      // CRITICAL: Add providers to persistent ref BEFORE setting state
+      // This ensures syncing state survives page navigation
+      for (const provider of request.providers) {
+        globalSyncingProviders.add(provider);
+      }
+
       // Set syncing state for each provider
       setProviders(prev => {
         const updated = { ...prev };
@@ -403,6 +433,12 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       for (const result of results) {
         if (result.dataChanged) anyDataChanged = true;
         if (result.timeChanged) anyTimeChanged = true;
+      }
+
+      // CRITICAL: Clear providers from persistent ref BEFORE fetching connections
+      // This ensures fetchConnections returns isSyncing: false
+      for (const provider of request.providers) {
+        globalSyncingProviders.delete(provider);
       }
 
       // Refresh connection state to get updated lastSyncAt
@@ -450,6 +486,11 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       }
 
     } catch (error) {
+      // CRITICAL: Clear providers from persistent ref on error
+      for (const provider of request.providers) {
+        globalSyncingProviders.delete(provider);
+      }
+
       // Reset syncing state on error
       setProviders(prev => {
         const updated = { ...prev };
@@ -637,8 +678,12 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
   /**
    * Immediately mark a provider as syncing (for UI feedback during connection flow)
    * This is called when a Connect component starts its sync, BEFORE the connection is fully confirmed.
+   * Uses ref to persist syncing state across page navigations.
    */
   const startProviderSync = useCallback((provider: ProviderKey): void => {
+    // Add to ref so state persists across navigation/refreshes
+    globalSyncingProviders.add(provider);
+    
     setProviders(prev => ({
       ...prev,
       [provider]: {
@@ -649,8 +694,27 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
     }));
   }, []);
 
+  /**
+   * Clear syncing state for a provider (called on error/cancel)
+   */
+  const stopProviderSync = useCallback((provider: ProviderKey): void => {
+    // Remove from ref
+    globalSyncingProviders.delete(provider);
+    
+    setProviders(prev => ({
+      ...prev,
+      [provider]: {
+        ...prev[provider],
+        isSyncing: false,
+      },
+    }));
+  }, []);
+
   const onProviderConnected = useCallback(async (provider: ProviderKey): Promise<void> => {
-    // Refresh connections to get updated state (this will also set isSyncing = false)
+    // Clear syncing state from ref (sync complete)
+    globalSyncingProviders.delete(provider);
+    
+    // Refresh connections to get updated state (isSyncing will be false since we cleared the ref)
     const connections = await fetchConnections();
     setProviders(connections);
     
@@ -701,6 +765,15 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
     initialize();
   }, [isLoaded, userId, fetchConnections]);
 
+  // Real-time timestamp updates: increment tick every 30 seconds
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setTick(t => t + 1);
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(intervalId);
+  }, []);
+
   // Setup auto-sync when providers change
   useEffect(() => {
     if (!isInitialized) return;
@@ -748,6 +821,7 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       syncProvider,
       refreshConnections,
       startProviderSync,
+      stopProviderSync,
       onProviderConnected,
       onProviderDisconnected,
     }),
@@ -765,6 +839,7 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       syncProvider,
       refreshConnections,
       startProviderSync,
+      stopProviderSync,
       onProviderConnected,
       onProviderDisconnected,
     ]

@@ -477,49 +477,52 @@ export function Sidebar({ isCollapsed, onToggle, onOpenCommandPalette }: Sidebar
         <div
           className={cn(
             'relative flex items-center h-16 px-4 border-b border-white/[0.06]',
-            isCollapsed ? 'justify-center' : 'gap-2'
+            isCollapsed ? 'justify-center' : ''
           )}
         >
-          {/* Logo icon */}
-          <div className="relative group cursor-pointer shrink-0">
+          {/* Unified Logo + Text as one word "EmergentOS" */}
+          <div className={cn(
+            'relative flex items-end group cursor-pointer',
+            isCollapsed ? '' : 'gap-0.5'
+          )}>
+            {/* Glow effect behind logo */}
             <div
               className={cn(
-                'absolute -inset-1 rounded-full blur-lg',
+                'absolute rounded-full blur-lg',
                 'bg-teal-500/30',
                 'opacity-60 group-hover:opacity-100',
                 'transition-opacity duration-300',
-                'animate-pulse'
+                'animate-pulse',
+                'w-8 h-8 -left-1 top-1/2 -translate-y-1/2'
               )}
               style={{ animationDuration: '3s' }}
             />
-            <div className="relative h-9 w-9 flex items-center justify-center">
+            {/* Logo as the "E" - lifted to sit on baseline */}
+            <div className="relative shrink-0 mb-[3px]">
               <Image
                 src="/logo.png"
-                alt="EmergentOS"
-                width={36}
-                height={36}
+                alt="E"
+                width={37}
+                height={37}
                 className="object-contain brightness-0 invert drop-shadow-[0_0_8px_rgba(20,184,166,0.5)]"
                 priority
               />
             </div>
-          </div>
-
-          {/* Logo text */}
+            {/* "mergentOS" text */}
           {!isCollapsed && (
-            <div
+              <span
               className={cn(
-                'flex items-end gap-1 min-w-0',
+                  'text-[22px] font-semibold text-foreground tracking-tight leading-none -ml-[1px] mb-[6px]',
                 'transition-all duration-200',
                 showLabels && visibleCount > 0
                   ? 'opacity-100 translate-x-0'
                   : 'opacity-0 -translate-x-2'
               )}
             >
-              <span className="text-xl font-semibold text-foreground tracking-tight leading-none mb-1.5">
                 mergentOS
               </span>
+            )}
             </div>
-          )}
         </div>
 
         {/* ================================================================ */}

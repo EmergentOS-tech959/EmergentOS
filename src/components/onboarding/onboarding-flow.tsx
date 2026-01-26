@@ -372,7 +372,7 @@ export function OnboardingFlow() {
         </div>
         
         <div className="relative z-10 flex flex-col items-center animate-fade-in">
-           <OnboardingLogo />
+        <OnboardingLogo />
            <div className="mt-8 flex flex-col items-center gap-2">
              <Loader2 className="h-5 w-5 text-teal-500 animate-spin" />
              <span className="text-xs text-muted-foreground/50 animate-pulse">Initializing system...</span>
@@ -405,21 +405,21 @@ export function OnboardingFlow() {
 
   if (state.phase === 'recap' && state.recapContent) {
     return (
-      <div className="flex flex-col min-h-screen">
-        <div className="py-8 flex justify-center">
+      <div className="flex flex-col h-screen overflow-hidden">
+        <div className="py-8 flex justify-center shrink-0">
           <OnboardingLogo />
         </div>
         
-        <div className="flex-1 flex items-center">
+        <div className="flex-1 flex items-center min-h-0 overflow-y-auto">
           <OnboardingRecap
             recap={state.recapContent}
             onConfirm={handleRecapConfirm}
             onRestart={handleRestart}
-            className="w-full"
+            className="w-full my-auto"
           />
         </div>
 
-        <div className="p-4 flex justify-center">
+        <div className="p-4 flex justify-center shrink-0">
           <button
             onClick={handleSkip}
             className="text-sm text-muted-foreground/60 hover:text-muted-foreground transition-colors"
@@ -454,40 +454,40 @@ export function OnboardingFlow() {
         </div>
 
         <div className="flex justify-center">
-           <ProgressIndicator 
-            current={getStepIndex(state.currentStep)} 
-            total={getTotalSteps()} 
-          />
-        </div>
+        <ProgressIndicator 
+          current={getStepIndex(state.currentStep)} 
+          total={getTotalSteps()} 
+        />
+      </div>
       </header>
 
       <main className="flex-1 flex flex-col relative z-0 max-w-3xl mx-auto w-full overflow-hidden">
-        <OnboardingChat
-          messages={state.messages}
-          isTyping={state.isTyping}
+      <OnboardingChat
+        messages={state.messages}
+        isTyping={state.isTyping}
           activeTypingMessageId={activeTypingMessageId}
           onTypingComplete={handleTypingComplete}
           className="flex-1 w-full"
-        />
+      />
 
         <div className="shrink-0 p-4 sm:p-6 pb-2 w-full">
           <div className="max-w-2xl mx-auto w-full">
-            <OnboardingInput
-              onSend={handleUserMessage}
-              disabled={state.isTyping || state.isLoading}
-              placeholder="Type your response..."
-            />
-            
+      <OnboardingInput
+        onSend={handleUserMessage}
+        disabled={state.isTyping || state.isLoading}
+        placeholder="Type your response..."
+      />
+
             <div className="flex flex-col items-center gap-2 mt-2">
                 <p className="text-[10px] text-muted-foreground/40 text-center">
                     Press Enter to send • Shift + Enter for new line
                 </p>
                 
                 <div className="flex items-center gap-4">
-                  <button
-                      onClick={handleSkip}
+        <button
+          onClick={handleSkip}
                       className="text-xs text-muted-foreground/40 hover:text-muted-foreground transition-colors px-3 py-1.5 rounded-full hover:bg-secondary/30"
-                  >
+        >
                       Skip Setup
                   </button>
 
@@ -496,8 +496,8 @@ export function OnboardingFlow() {
                       className="text-xs text-muted-foreground/40 hover:text-muted-foreground transition-colors px-3 py-1.5 rounded-full hover:bg-secondary/30"
                   >
                       Restart
-                  </button>
-                </div>
+        </button>
+      </div>
             </div>
           </div>
         </div>

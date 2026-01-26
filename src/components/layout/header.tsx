@@ -1,7 +1,7 @@
 'use client';
 
 import { UserButton } from '@clerk/nextjs';
-import { Search, Menu, Sparkles } from 'lucide-react';
+import { Search, Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -69,12 +69,6 @@ export function Header({
 
       {/* Right Section */}
       <div className="flex items-center gap-3">
-        {/* AI Assistant Badge - Hidden on mobile */}
-        <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gradient-copper border border-ai-copper/20">
-          <Sparkles className="h-3.5 w-3.5 text-ai-copper" />
-          <span className="text-[11px] font-medium text-ai-copper">AI Ready</span>
-        </div>
-        
         {/* User Button */}
         <div className="relative">
         <UserButton

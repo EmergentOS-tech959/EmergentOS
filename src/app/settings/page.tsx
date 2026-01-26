@@ -161,7 +161,7 @@ function ConnectionCard({
 export default function SettingsPage() {
   const { user } = useUser();
   const router = useRouter();
-  const { providers, refreshConnections, onProviderDisconnected, onProviderConnected, startProviderSync } = useSyncManager();
+  const { providers, refreshConnections, onProviderDisconnected, onProviderConnected, startProviderSync, stopProviderSync } = useSyncManager();
   
   const [disconnecting, setDisconnecting] = useState<Record<ProviderKey, boolean>>({
     gmail: false,
@@ -282,39 +282,39 @@ export default function SettingsPage() {
 
         {/* Account Tab */}
         <TabsContent value="account" className="space-y-5 pt-6">
-          <h3 className="text-sm font-medium text-foreground">Profile</h3>
+            <h3 className="text-sm font-medium text-foreground">Profile</h3>
           
           {/* Profile and Profile Setup side by side */}
-          <div className="p-4 rounded-lg border border-border/30 bg-secondary/20">
-            <div className="flex items-center gap-4">
+            <div className="p-4 rounded-lg border border-border/30 bg-secondary/20">
+              <div className="flex items-center gap-4">
               <Avatar className="h-14 w-14 shrink-0">
-                <AvatarImage src={user?.imageUrl} />
-                <AvatarFallback className="text-sm font-medium bg-primary/10 text-primary">
-                  {user?.firstName?.[0]}{user?.lastName?.[0]}
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <h4 className="font-medium text-sm text-foreground">
-                    {user?.fullName || 'User'}
-                  </h4>
-                  <span className="text-[10px] text-emerald-500 font-medium flex items-center gap-0.5">
-                    <Shield className="h-3 w-3" />
-                    Verified
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {user?.primaryEmailAddress?.emailAddress}
-                </p>
-              </div>
-              
+                  <AvatarImage src={user?.imageUrl} />
+                  <AvatarFallback className="text-sm font-medium bg-primary/10 text-primary">
+                    {user?.firstName?.[0]}{user?.lastName?.[0]}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-medium text-sm text-foreground">
+                      {user?.fullName || 'User'}
+                    </h4>
+                    <span className="text-[10px] text-emerald-500 font-medium flex items-center gap-0.5">
+                      <Shield className="h-3 w-3" />
+                      Verified
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {user?.primaryEmailAddress?.emailAddress}
+            </p>
+          </div>
+
               {/* Profile Setup Status - moved to the right */}
               <div className="shrink-0">
                 {onboardingStatus === null && (
                   <div className="h-9 w-32 bg-secondary/50 rounded-md animate-pulse" />
                 )}
-
-                {onboardingStatus === 'skipped' && (
+            
+            {onboardingStatus === 'skipped' && (
                   <Button 
                     onClick={() => router.push('/onboarding')}
                     className="bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white gap-2 shadow-sm font-medium transition-all hover:shadow-md hover:scale-[1.02]"
@@ -323,9 +323,9 @@ export default function SettingsPage() {
                     <Sparkles className="h-4 w-4" />
                     Complete Profile
                   </Button>
-                )}
-                
-                {onboardingStatus === 'in_progress' && (
+            )}
+            
+            {onboardingStatus === 'in_progress' && (
                   <Button 
                     onClick={() => router.push('/onboarding')}
                     className="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white gap-2 shadow-sm font-medium transition-all hover:shadow-md hover:scale-[1.02]"
@@ -334,9 +334,9 @@ export default function SettingsPage() {
                     <Sparkles className="h-4 w-4" />
                     Continue Setup
                   </Button>
-                )}
+            )}
 
-                {onboardingStatus === 'pending' && (
+            {onboardingStatus === 'pending' && (
                   <Button 
                     onClick={() => router.push('/onboarding')}
                     className="bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 text-white gap-2 shadow-sm font-medium transition-all hover:shadow-md hover:scale-[1.02]"
@@ -345,13 +345,13 @@ export default function SettingsPage() {
                     <Sparkles className="h-4 w-4" />
                     Start Onboarding
                   </Button>
-                )}
-                
-                {onboardingStatus === 'completed' && (
+            )}
+            
+            {onboardingStatus === 'completed' && (
                   <div className="flex items-center gap-1.5 text-emerald-500 text-xs font-medium px-3 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20">
                     <CheckCircle2 className="h-3.5 w-3.5" />
                     <span>Profile Complete</span>
-                  </div>
+                </div>
                 )}
               </div>
             </div>
@@ -394,6 +394,7 @@ export default function SettingsPage() {
                     className="h-9 w-full text-xs font-medium bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white shadow-sm border-0"
                     onSyncStart={() => startProviderSync('gmail')}
                     onConnectionSuccess={() => handleConnectionSuccess('gmail')}
+                    onConnectionError={() => stopProviderSync('gmail')}
                   />
                 }
                 onDisconnect={() => handleDisconnect('gmail')}
@@ -422,6 +423,7 @@ export default function SettingsPage() {
                     className="h-9 w-full text-xs font-medium bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white shadow-sm border-0"
                     onSyncStart={() => startProviderSync('calendar')}
                     onConnectionSuccess={() => handleConnectionSuccess('calendar')}
+                    onConnectionError={() => stopProviderSync('calendar')}
                   />
                 }
                 onDisconnect={() => handleDisconnect('calendar')}
@@ -450,6 +452,7 @@ export default function SettingsPage() {
                     className="h-9 w-full text-xs font-medium bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white shadow-sm border-0"
                     onSyncStart={() => startProviderSync('drive')}
                     onConnectionSuccess={() => handleConnectionSuccess('drive')}
+                    onConnectionError={() => stopProviderSync('drive')}
                   />
                 }
                 onDisconnect={() => handleDisconnect('drive')}

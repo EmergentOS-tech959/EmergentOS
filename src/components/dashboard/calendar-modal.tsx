@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useRef } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,19 +16,22 @@ import {
   FileText,
   Trash2,
   AlertTriangle,
-  CalendarDays
+  CalendarDays,
+  RefreshCw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
 interface CalendarEvent {
   id: string;
+  event_id: string;
   title: string;
   start_time: string;
   end_time: string;
   location?: string;
   description?: string;
   has_conflict: boolean;
+  conflict_with?: string[];
   status: 'confirmed' | 'tentative' | 'cancelled';
   attendees?: unknown[];
 }
@@ -40,8 +43,10 @@ interface CalendarModalProps {
   onEventCreate?: (event: Partial<CalendarEvent>) => Promise<void>;
   onEventUpdate?: (id: string, event: Partial<CalendarEvent>) => Promise<void>;
   onEventDelete?: (id: string) => Promise<void>;
+  onRefreshConflicts?: () => Promise<void>;
   isConnected: boolean;
   lastSyncDisplay: string;
+  initialDate?: Date | null;
 }
 
 const HOUR_HEIGHT = 56;
@@ -64,10 +69,23 @@ export function CalendarModal({
   events,
   onEventCreate,
   onEventDelete,
+  onRefreshConflicts,
   isConnected,
+  // lastSyncDisplay is received but not currently displayed in the modal
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   lastSyncDisplay,
+  initialDate,
 }: CalendarModalProps) {
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState(initialDate || new Date());
+  
+  // Update selected date when initialDate changes or modal opens
+  useEffect(() => {
+    if (isOpen && initialDate) {
+      setSelectedDate(initialDate);
+    } else if (isOpen && !initialDate) {
+      setSelectedDate(new Date());
+    }
+  }, [isOpen, initialDate]);
   const [showEventForm, setShowEventForm] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [formData, setFormData] = useState({
@@ -78,7 +96,21 @@ export function CalendarModal({
     description: '',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleRefreshConflicts = async () => {
+    if (!onRefreshConflicts || isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await onRefreshConflicts();
+      toast.success('Conflicts recalculated');
+    } catch {
+      toast.error('Failed to recalculate conflicts');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const isToday = useMemo(() => {
     const today = new Date();
@@ -96,7 +128,24 @@ export function CalendarModal({
       .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
   }, [events, selectedDate]);
 
-  const conflictCount = useMemo(() => dayEvents.filter(e => e.has_conflict).length, [dayEvents]);
+  // Calculate unique conflict PAIRS for this day (not events with conflicts)
+  const conflictPairCount = useMemo(() => {
+    const seenPairs = new Set<string>();
+    for (const event of dayEvents) {
+      if (event.has_conflict && event.conflict_with?.length) {
+        for (const conflictId of event.conflict_with) {
+          // Only count if the conflicting event is also in today's events
+          const conflictingEvent = dayEvents.find(e => e.event_id === conflictId);
+          if (conflictingEvent) {
+            // Create sorted pair key to avoid counting A-B and B-A as separate
+            const pairKey = [event.event_id, conflictId].sort().join('|');
+            seenPairs.add(pairKey);
+          }
+        }
+      }
+    }
+    return seenPairs.size;
+  }, [dayEvents]);
 
   const goToPrevDay = () => setSelectedDate(d => new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1));
   const goToNextDay = () => setSelectedDate(d => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1));
@@ -162,6 +211,8 @@ export function CalendarModal({
     }
   };
 
+  const TIME_GUTTER = 56; // Width of the time labels column
+
   const getEventPosition = (event: CalendarEvent, overlapIndex = 0, totalOverlaps = 1) => {
     const start = new Date(event.start_time);
     const end = new Date(event.end_time);
@@ -177,9 +228,24 @@ export function CalendarModal({
     if (eventEndDateStr > dateStr) endMins = 24 * 60;
     
     const top = (startMins / 60) * HOUR_HEIGHT;
-    const height = Math.max(((endMins - startMins) / 60) * HOUR_HEIGHT, 24);
-    const width = totalOverlaps > 1 ? `${(100 / totalOverlaps) - 1}%` : 'calc(100% - 60px)';
-    const left = totalOverlaps > 1 ? `calc(56px + ${(overlapIndex * 100) / totalOverlaps}%)` : '56px';
+    const height = Math.max(((endMins - startMins) / 60) * HOUR_HEIGHT, 28);
+    
+    // Calculate width and left position properly for overlapping events
+    // Available width = 100% - TIME_GUTTER - right padding (8px)
+    const availableWidthCalc = `(100% - ${TIME_GUTTER + 8}px)`;
+    const eventWidthPercent = (1 / totalOverlaps) * 100;
+    const eventLeftPercent = (overlapIndex / totalOverlaps) * 100;
+    
+    // Width: each event gets an equal share of available space minus gap
+    const gap = totalOverlaps > 1 ? 2 : 0; // 2px gap between overlapping events
+    const width = totalOverlaps > 1 
+      ? `calc(${availableWidthCalc} * ${eventWidthPercent / 100} - ${gap}px)`
+      : `calc(100% - ${TIME_GUTTER + 8}px)`;
+    
+    // Left: TIME_GUTTER + percentage of available width
+    const left = totalOverlaps > 1
+      ? `calc(${TIME_GUTTER}px + ${availableWidthCalc} * ${eventLeftPercent / 100})`
+      : `${TIME_GUTTER}px`;
     
     return { top, height, width, left };
   };
@@ -222,13 +288,16 @@ export function CalendarModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-[1100px] w-[92vw] h-[85vh] max-h-[800px] p-0 flex flex-col bg-background border-border/50 rounded-xl overflow-hidden">
+      <DialogContent 
+        showCloseButton={false}
+        className="max-w-[1100px] w-[92vw] h-[85vh] max-h-[800px] p-0 flex flex-col bg-[#0c1117] border-2 border-sky-500/30 rounded-2xl overflow-hidden shadow-[0_0_50px_rgba(14,165,233,0.15)]"
+      >
         {/* Header */}
-        <div className="shrink-0 px-5 py-4 border-b border-border/50 bg-secondary/30">
+        <div className="shrink-0 px-5 py-4 border-b border-sky-500/20 bg-gradient-to-r from-sky-500/10 via-transparent to-transparent">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              {/* Navigation */}
-              <div className="flex items-center gap-0.5 bg-secondary/50 border border-border/30 rounded-lg p-0.5">
+            <div className="flex items-center gap-5">
+              {/* Navigation with New Event */}
+              <div className="flex items-center gap-0.5 bg-secondary/60 border border-border/30 rounded-lg p-0.5">
                 <Button 
                   variant="ghost" 
                   size="sm" 
@@ -255,45 +324,77 @@ export function CalendarModal({
                 </Button>
               </div>
               
-              <div>
-                <DialogTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-                  {selectedDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+              {/* Date Title - Large */}
+              <DialogTitle className="text-xl font-semibold text-foreground flex items-center gap-3">
+                <CalendarDays className="w-6 h-6 text-sky-500" />
+                <span>{selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</span>
                   {isToday && (
                     <span className="text-[10px] bg-teal-500 text-white px-2 py-0.5 rounded-full font-medium">
                       Today
                     </span>
                   )}
                 </DialogTitle>
-                <div className="flex items-center gap-3 mt-0.5">
-                  <span className="text-xs text-muted-foreground">
-                    {dayEvents.length} event{dayEvents.length !== 1 ? 's' : ''}
-                  </span>
-                  {conflictCount > 0 && (
-                    <span className="text-xs text-amber-500 flex items-center gap-1">
-                      <AlertTriangle className="h-3 w-3" />
-                      {conflictCount} conflict{conflictCount !== 1 ? 's' : ''}
-                    </span>
-                  )}
-                  {lastSyncDisplay !== 'Never synced' && (
-                    <span className="text-xs text-muted-foreground/60 flex items-center gap-1">
-                      <Clock className="h-3 w-3" />
-                      {lastSyncDisplay}
-                    </span>
-                  )}
-                </div>
-              </div>
             </div>
             
+            <div className="flex items-center gap-1.5">
+              {/* Refresh Conflicts - Icon Button */}
+              {onRefreshConflicts && (
+                <Button 
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleRefreshConflicts}
+                  disabled={isRefreshing}
+                  className="h-8 w-8 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 hover:text-amber-400 transition-colors"
+                  title="Recalculate Conflicts"
+                >
+                  <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
+                </Button>
+              )}
+              {/* New Event - Icon Button */}
             <Button 
-              size="sm" 
+                variant="ghost"
+                size="icon"
               onClick={openNewEventForm} 
-              className="gap-1.5 bg-teal-500 hover:bg-teal-600 text-white font-medium h-8 px-3 text-xs"
+                className="h-8 w-8 rounded-lg bg-teal-500/15 hover:bg-teal-500/25 text-teal-500 hover:text-teal-400 transition-colors"
+                title="Create New Event"
             >
-              <Plus className="h-3.5 w-3.5" />
-                New Event
+                <Plus className="h-4 w-4" />
               </Button>
+              {/* Close Button */}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onClose}
+                className="h-8 w-8 rounded-lg bg-secondary/80 hover:bg-red-500/20 text-muted-foreground hover:text-red-400 transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
+
+        {/* Day Summary Bar - Shows event count and conflicts */}
+        {isConnected && dayEvents.length > 0 && (
+          <div className="px-5 py-2.5 border-b border-border/30 bg-secondary/20">
+            <div className="flex items-center justify-between text-[11px]">
+              <div className="flex items-center gap-3">
+                <span className="text-muted-foreground font-medium">
+                  {dayEvents.length} event{dayEvents.length !== 1 ? 's' : ''}
+                </span>
+                {conflictPairCount > 0 ? (
+                  <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-red-500/15 text-red-500 font-semibold border border-red-500/20">
+                    <AlertTriangle className="w-3 h-3" />
+                    {conflictPairCount} conflict{conflictPairCount !== 1 ? 's' : ''}
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-emerald-500/80 font-medium">
+                    No conflicts
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Calendar Grid */}
         <div className="flex-1 flex overflow-hidden">
@@ -356,8 +457,8 @@ export function CalendarModal({
                           'absolute rounded-lg px-2.5 py-1.5 text-left text-xs overflow-hidden transition-all',
                           'hover:brightness-110 hover:z-30',
                           event.has_conflict
-                            ? 'bg-amber-500/15 text-foreground border-l-2 border-l-amber-500'
-                            : 'bg-teal-500/15 text-foreground border-l-2 border-l-teal-500'
+                            ? 'bg-red-500/10 text-foreground border-l-4 border-l-red-500 ring-1 ring-red-500/20'
+                            : 'bg-teal-500/15 text-foreground border-l-4 border-l-teal-500'
                         )}
                         style={{ 
                           top: pos.top, 
@@ -366,14 +467,19 @@ export function CalendarModal({
                           left: pos.left,
                         }}
                       >
-                        <p className="font-medium truncate text-xs">{event.title}</p>
+                        <div className="flex items-start justify-between gap-1">
+                          <p className="font-medium truncate text-xs flex-1">{event.title}</p>
+                          {event.has_conflict && (
+                            <span className="shrink-0 flex items-center gap-0.5 px-1 py-0.5 rounded bg-red-500/20 text-red-500">
+                              <AlertTriangle className="h-2.5 w-2.5" />
+                              <span className="text-[8px] font-bold uppercase">Conflict</span>
+                            </span>
+                          )}
+                        </div>
                         <p className="text-[10px] text-muted-foreground truncate">
                           {new Date(event.start_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
                           {event.location && ` · ${event.location.includes('http') ? 'Online' : event.location}`}
                         </p>
-                        {event.has_conflict && (
-                          <AlertTriangle className="absolute top-1.5 right-1.5 h-3 w-3 text-amber-500" />
-                        )}
                       </button>
                     );
                   })

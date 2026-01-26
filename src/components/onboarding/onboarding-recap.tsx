@@ -53,14 +53,16 @@ export function OnboardingRecap({
       </div>
 
       <div className={cn(
-        'w-full p-6 rounded-2xl',
+        'w-full rounded-2xl',
         'bg-secondary/30 border border-border/50',
-        'relative overflow-hidden'
+        'relative flex flex-col max-h-[60vh]'
       )}>
-        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-teal-500/50 via-sky-500/50 to-teal-500/50" />
+        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-teal-500/50 via-sky-500/50 to-teal-500/50 z-10" />
+        <div className="p-6 overflow-y-auto eos-scrollbar-thin">
         <div className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">
           {recap}
-        </div>
+            </div>
+          </div>
       </div>
 
       <div className="flex items-center gap-3 mt-6">

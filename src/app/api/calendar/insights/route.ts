@@ -17,10 +17,10 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // 2. Fetch calendar insights for user
+    // 2. Fetch calendar insights for user (including new health_score and verdict fields)
     const { data: insight, error } = await supabase
       .from('calendar_insights')
-      .select('id, content, conflicts_count, focus_time_hours, meeting_hours, generated_at')
+      .select('id, content, conflicts_count, focus_time_hours, meeting_hours, health_score, verdict, generated_at')
       .eq('user_id', userId)
       .single();
 
@@ -40,7 +40,7 @@ export async function GET() {
       });
     }
 
-    // 3. Return insights
+    // 3. Return insights with enhanced fields
     return NextResponse.json({
       found: true,
       insight: {
@@ -49,6 +49,8 @@ export async function GET() {
         conflictsCount: insight.conflicts_count,
         focusTimeHours: insight.focus_time_hours,
         meetingHours: insight.meeting_hours,
+        healthScore: insight.health_score,
+        verdict: insight.verdict,
         generatedAt: insight.generated_at,
       },
     });

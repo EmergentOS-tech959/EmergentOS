@@ -98,7 +98,7 @@ const PROVIDERS = {
 export function DailyBriefingWidget() {
   const { isLoaded, user } = useUser();
   const router = useRouter();
-  const { providers, isSyncing, isInitialized } = useSyncManager();
+  const { providers, isSyncing, isInitialized, displayStrings } = useSyncManager();
 
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -246,7 +246,7 @@ export function DailyBriefingWidget() {
   if (error) {
     return (
       <Card className="p-6 h-full flex flex-col">
-        <BriefingHeader providers={providers} />
+        <BriefingHeader providers={providers} lastSyncDisplay={displayStrings.global} />
         <div className="flex-1 flex flex-col items-center justify-center text-center px-4">
           <AlertCircle className="h-12 w-12 text-red-400 mb-4" />
           <h3 className="text-lg font-semibold text-foreground mb-2">Error Loading Briefing</h3>
@@ -263,7 +263,7 @@ export function DailyBriefingWidget() {
   if (!briefing) {
     return (
       <Card className="p-6 h-full flex flex-col">
-        <BriefingHeader providers={providers} />
+        <BriefingHeader providers={providers} lastSyncDisplay={displayStrings.global} />
         <div className="flex-1 flex flex-col items-center justify-center text-center px-4">
           <div className="relative mb-5">
             <div className="absolute inset-0 bg-gradient-to-br from-amber-500/20 to-orange-500/10 rounded-2xl blur-xl" />
@@ -307,7 +307,7 @@ export function DailyBriefingWidget() {
     <Card className="p-6 h-full flex flex-col">
       <BriefingHeader 
         providers={providers} 
-        generatedAt={briefing.generated_at}
+        lastSyncDisplay={displayStrings.global}
       />
 
       {/* Scrollable Content */}
@@ -501,10 +501,10 @@ export function DailyBriefingWidget() {
 
 function BriefingHeader({ 
   providers, 
-  generatedAt,
+  lastSyncDisplay,
 }: { 
   providers: Record<ProviderKey, { status: string; lastSyncAt: string | null; isSyncing: boolean }>;
-  generatedAt?: string;
+  lastSyncDisplay?: string;
 }) {
   return (
     <div className="flex items-start justify-between mb-4">
@@ -515,8 +515,8 @@ function BriefingHeader({
           <div>
             <h3 className="widget-title">Daily Briefing</h3>
           <p className="widget-subtitle">
-            {generatedAt 
-              ? `Updated ${new Date(generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+            {lastSyncDisplay && lastSyncDisplay !== 'Not connected'
+              ? lastSyncDisplay
               : 'AI-powered insights'
             }
           </p>

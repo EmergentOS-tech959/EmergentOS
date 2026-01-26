@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Sidebar } from './sidebar';
 import { Header } from './header';
@@ -19,6 +20,12 @@ const SIDEBAR_COLLAPSED_KEY = 'emergent-sidebar-collapsed';
 
 export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  
+  // Onboarding gate: check if user needs to complete onboarding
+  const [onboardingChecked, setOnboardingChecked] = useState(false);
+  const [isRedirecting, setIsRedirecting] = useState(false);
+  
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
     // Initialize from localStorage if available (only on client)
     if (typeof window !== 'undefined') {
@@ -34,6 +41,30 @@ export function AppShell({ children }: AppShellProps) {
   const [isOmniPanelOpen, setIsOmniPanelOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const userHasToggledRef = useRef(false);
+
+  // Check onboarding status on mount - redirect to onboarding if pending
+  useEffect(() => {
+    const checkOnboardingStatus = async () => {
+      try {
+        const response = await fetch('/api/onboarding/status');
+        if (response.ok) {
+          const data = await response.json();
+          // If onboarding is pending, redirect to onboarding page
+          if (data.status === 'pending') {
+            setIsRedirecting(true);
+            router.replace('/onboarding');
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('[AppShell] Failed to check onboarding status:', error);
+        // On error, allow access - don't block the app
+      }
+      setOnboardingChecked(true);
+    };
+
+    checkOnboardingStatus();
+  }, [router]);
 
   // Persist sidebar collapsed state to localStorage
   useEffect(() => {
@@ -108,6 +139,20 @@ export function AppShell({ children }: AppShellProps) {
   const handleOpenCommandPalette = useCallback(() => {
     setIsCommandPaletteOpen(true);
   }, []);
+
+  // Show loading state while checking onboarding status
+  if (!onboardingChecked || isRedirecting) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 text-teal-500 animate-spin" />
+          <span className="text-sm text-muted-foreground">
+            {isRedirecting ? 'Redirecting to setup...' : 'Loading...'}
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <SyncManagerProvider>

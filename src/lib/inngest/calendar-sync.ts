@@ -11,8 +11,8 @@ import { daysAgoUTC, daysFromNowUTC, startOfDayUTC } from '../time';
 import { stripHtml, detectConflicts, identifyFocusBlocks, getConflictDetails } from '../helpers';
 import { classifyError, formatErrorMessage } from '../errors';
 import { generateAndStoreEmbeddings, prepareCalendarEmbeddings } from '../embeddings';
-import { callGeminiJSON, isGeminiConfigured } from '../llm/gemini';
-import { buildCalendarAnalysisPrompt } from '../llm/prompts';
+import { callGeminiWithSchema, CALENDAR_ANALYSIS_SCHEMA, isGeminiConfigured } from '../llm/gemini';
+import { buildCalendarAnalysisPrompt, type UserProfileContext } from '../llm/prompts';
 import {
   CALENDAR_PAST_DAYS,
   CALENDAR_FUTURE_DAYS,
@@ -355,7 +355,7 @@ export const processCalendarSync = inngest.createFunction(
         }
       }
 
-      // Add user_id and detect conflicts
+      // Add user_id to events
       // IMPORTANT: Remove 'status' field as it's not in the database schema
       // (status is only used for filtering cancelled events above)
       const eventsWithUserId = activeEvents.map((e) => {
@@ -365,17 +365,17 @@ export const processCalendarSync = inngest.createFunction(
           ...eventWithoutStatus,
           user_id: userId,
           security_verified: true,
+          // Set initial conflict flags (will be recalculated after upsert)
+          has_conflict: false,
+          conflict_with: [],
         };
       });
 
-      // Detect conflicts using sweep line algorithm
-      const eventsWithConflicts = detectConflicts(eventsWithUserId);
-
-      // UPSERT active events
-      if (eventsWithConflicts.length > 0) {
+      // STEP 1: UPSERT new/updated events first (without conflict detection)
+      if (eventsWithUserId.length > 0) {
         const upsertBatchSize = 100;
-        for (let i = 0; i < eventsWithConflicts.length; i += upsertBatchSize) {
-          const batch = eventsWithConflicts.slice(i, i + upsertBatchSize);
+        for (let i = 0; i < eventsWithUserId.length; i += upsertBatchSize) {
+          const batch = eventsWithUserId.slice(i, i + upsertBatchSize);
           const { error } = await supabase
             .from('calendar_events')
             .upsert(batch, { onConflict: 'user_id,event_id' });
@@ -384,6 +384,37 @@ export const processCalendarSync = inngest.createFunction(
             console.error('[Calendar Sync] UPSERT error:', error);
             throw new Error(`Calendar UPSERT failed: ${error.message}`);
           }
+        }
+      }
+
+      // STEP 2: Fetch ALL events from database for this user to detect conflicts globally
+      const { data: allUserEvents, error: fetchAllError } = await supabase
+        .from('calendar_events')
+        .select('id, event_id, start_time, end_time')
+        .eq('user_id', userId);
+
+      if (fetchAllError) {
+        console.error('[Calendar Sync] Fetch all events error:', fetchAllError);
+        throw new Error(`Failed to fetch all events: ${fetchAllError.message}`);
+      }
+
+      // STEP 3: Detect conflicts across ALL user events
+      const allEventsWithConflicts = detectConflicts(allUserEvents || []);
+      
+      console.log(`[Calendar Sync] Conflict detection: total events=${allEventsWithConflicts.length}, conflicts found=${allEventsWithConflicts.filter(e => e.has_conflict).length}`);
+
+      // STEP 4: Update conflict flags for ALL events (batch update)
+      for (const event of allEventsWithConflicts) {
+        const { error: updateError } = await supabase
+          .from('calendar_events')
+          .update({ 
+            has_conflict: event.has_conflict, 
+            conflict_with: event.conflict_with 
+          })
+          .eq('id', event.id);
+
+        if (updateError) {
+          console.error(`[Calendar Sync] Conflict update error for event ${event.event_id}:`, updateError);
         }
       }
 
@@ -452,7 +483,7 @@ export const processCalendarSync = inngest.createFunction(
       try {
         const analysisResult = await runCalendarAnalysis(userId);
 
-        // UPSERT into calendar_insights
+        // UPSERT into calendar_insights with enhanced fields
         await supabase
           .from('calendar_insights')
           .upsert({
@@ -461,11 +492,13 @@ export const processCalendarSync = inngest.createFunction(
             conflicts_count: analysisResult.conflicts_count,
             focus_time_hours: analysisResult.focus_time_hours,
             meeting_hours: analysisResult.meeting_hours,
+            health_score: analysisResult.health_score,
+            verdict: analysisResult.verdict,
             generated_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           }, { onConflict: 'user_id' });
 
-        console.log('[Calendar Sync] Analysis complete');
+        console.log(`[Calendar Sync] Analysis complete: score=${analysisResult.health_score}, verdict=${analysisResult.verdict}`);
       } catch (error) {
         console.error('[Calendar Sync] Analysis error:', error);
         // Don't fail the sync for analysis errors
@@ -694,11 +727,14 @@ async function runCalendarAnalysis(userId: string): Promise<{
   conflicts_count: number;
   focus_time_hours: number;
   meeting_hours: number;
+  health_score: number;
+  verdict: string;
 }> {
   // Fetch events in analysis window (7 days past, 14 days future)
   const pastDate = daysAgoUTC(CALENDAR_ANALYSIS_PAST_DAYS).toISOString();
   const futureDate = daysFromNowUTC(CALENDAR_ANALYSIS_FUTURE_DAYS).toISOString();
 
+  // Fetch calendar events
   const { data: events } = await supabase
     .from('calendar_events')
     .select('*')
@@ -706,6 +742,22 @@ async function runCalendarAnalysis(userId: string): Promise<{
     .gte('start_time', pastDate)
     .lte('start_time', futureDate)
     .order('start_time', { ascending: true });
+
+  // Fetch user profile for personalization
+  const { data: userProfile } = await supabase
+    .from('user_profiles')
+    .select('onboarding_status, onboarding_answers, ai_assessment')
+    .eq('user_id', userId)
+    .single();
+
+  // Build user profile context for personalized analysis
+  const profileContext: UserProfileContext = {
+    hasOnboarding: userProfile?.onboarding_status === 'completed',
+    answers: userProfile?.onboarding_answers as UserProfileContext['answers'],
+    assessment: userProfile?.ai_assessment as UserProfileContext['assessment'],
+  };
+
+  console.log(`[Calendar Sync] Analysis personalization: hasOnboarding=${profileContext.hasOnboarding}`);
 
   const calendarEvents = (events || []).map((e) => ({
     event_id: e.event_id,
@@ -725,26 +777,34 @@ async function runCalendarAnalysis(userId: string): Promise<{
   const conflicts = getConflictDetails(calendarEvents);
   const focusBlocks = identifyFocusBlocks(calendarEvents, new Date());
 
-  // Build prompt and call Gemini
-  const prompt = buildCalendarAnalysisPrompt(calendarEvents, conflicts, focusBlocks);
-  const responseText = await callGeminiJSON(prompt);
+  // Build prompt with user profile context and call Gemini with structured schema
+  const prompt = buildCalendarAnalysisPrompt(calendarEvents, conflicts, focusBlocks, profileContext);
 
-  // Parse response
+  // Use structured output schema for reliable JSON extraction
+  const responseText = await callGeminiWithSchema(prompt, CALENDAR_ANALYSIS_SCHEMA);
+
+  // Parse response (schema enforcement guarantees valid JSON)
   let content: Record<string, unknown>;
   try {
     content = JSON.parse(responseText);
   } catch {
-    console.error('[Calendar Sync] Failed to parse analysis response:', responseText);
+    console.error('[Calendar Sync] Failed to parse analysis response despite schema:', responseText);
     content = { error: 'Failed to parse analysis', raw: responseText };
   }
 
-  // Extract metrics
+  // Extract metrics from structured output
   const metrics = (content.metrics || {}) as Record<string, number>;
+  const healthScore = (content.healthScore as number) || 50;
+  const verdict = (content.verdict as string) || 'MODERATE';
+
+  console.log(`[Calendar Sync] Analysis complete: healthScore=${healthScore}, verdict=${verdict}`);
 
   return {
     content,
-    conflicts_count: metrics.conflictCount || conflicts.length,
-    focus_time_hours: metrics.focusHoursAvailable || focusBlocks.reduce((sum, b) => sum + b.durationHours, 0),
-    meeting_hours: metrics.meetingHoursTotal || 0,
+    conflicts_count: metrics.conflictCount ?? conflicts.length,
+    focus_time_hours: metrics.focusHoursAvailable ?? focusBlocks.reduce((sum, b) => sum + b.durationHours, 0),
+    meeting_hours: metrics.meetingHoursTotal ?? 0,
+    health_score: healthScore,
+    verdict,
   };
 }
