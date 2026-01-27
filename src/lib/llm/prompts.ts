@@ -357,7 +357,8 @@ export function buildBriefingPrompt(
   emails: Email[],
   events: CalendarEvent[],
   documents: DriveDocument[],
-  connectedSources: { gmail: boolean; calendar: boolean; drive: boolean }
+  connectedSources: { gmail: boolean; calendar: boolean; drive: boolean },
+  userProfile?: UserProfileContext
 ): string {
   const now = new Date();
   const currentTimeUTC = now.toISOString();
@@ -379,7 +380,7 @@ export function buildBriefingPrompt(
   else if (dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday') dayContext = 'Weekend - Strategic thinking and recovery';
   else dayContext = 'Mid-week - Execution and progress focus';
 
-  // Find next event
+  // Find next upcoming event (could be today or tomorrow since events include both)
   const upcomingEvents = events
     .filter((e) => new Date(e.start_time) > now)
     .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
@@ -387,6 +388,9 @@ export function buildBriefingPrompt(
   const minutesToNextEvent = nextEvent
     ? Math.round((new Date(nextEvent.start_time).getTime() - now.getTime()) / 60000)
     : null;
+  
+  // Check if next event is today or tomorrow
+  const nextEventIsToday = nextEvent ? isToday(nextEvent.start_time) : false;
 
   // Identify VIP/urgent emails
   const urgentKeywords = ['urgent', 'asap', 'immediately', 'critical', 'deadline', 'eod', 'cob'];
@@ -397,89 +401,159 @@ export function buildBriefingPrompt(
     )
   );
 
-  return `You are a chief of staff preparing an executive briefing.
+  // Calculate conflicts count - count unique conflict PAIRS, not events with conflicts
+  // Use Set to track unique pairs (sorted event_ids joined)
+  const conflictPairs = new Set<string>();
+  for (const event of events) {
+    if (event.has_conflict && event.conflict_with?.length) {
+      for (const conflictId of event.conflict_with) {
+        // Create deterministic pair key by sorting
+        const pairKey = [event.event_id, conflictId].sort().join('|');
+        conflictPairs.add(pairKey);
+      }
+    }
+  }
+  const conflictCount = conflictPairs.size;
+
+  // Calculate total meeting hours for today
+  const todayEvents = events.filter((e) => isToday(e.start_time));
+  const totalMeetingMinutes = todayEvents.reduce((sum, e) => {
+    return sum + (new Date(e.end_time).getTime() - new Date(e.start_time).getTime()) / 60000;
+  }, 0);
+
+  // Get user context section (personalization)
+  const userContextSection = buildUserContextSection(userProfile);
+  const hasOnboarding = userProfile?.hasOnboarding ?? false;
+
+  return `You are a strategic chief of staff preparing an executive daily briefing.
+${hasOnboarding ? 'IMPORTANT: This user has completed onboarding. Personalize ALL recommendations based on their profile.' : 'This user has not completed onboarding. Apply universal executive best practices.'}
 
 ## CURRENT CONTEXT
 - Current Time (UTC): ${currentTimeUTC}
 - Day: ${dayOfWeek}
 - Time Context: ${timeContext}
 - Day Context: ${dayContext}
-${nextEvent ? `- Next Event: "${nextEvent.title}" in ${minutesToNextEvent} minutes` : '- No upcoming events today'}
+${nextEvent 
+    ? `- Next Event: "${nextEvent.title}" in ${minutesToNextEvent} minutes${!nextEventIsToday ? ' (tomorrow)' : ''}` 
+    : '- No upcoming events in the next 48 hours'}
+${conflictCount > 0 ? `- ⚠️ SCHEDULING CONFLICTS: ${conflictCount} detected - REQUIRES IMMEDIATE ATTENTION` : ''}
+
+${userContextSection}
 
 ## DATA SOURCES STATUS
 - Gmail: ${connectedSources.gmail ? `Connected (${emails.length} recent emails, ${urgentEmails.length} potentially urgent)` : 'Not connected'}
-- Calendar: ${connectedSources.calendar ? `Connected (${events.length} events in scope)` : 'Not connected'}
+- Calendar: ${connectedSources.calendar ? `Connected (${todayEvents.length} events today, ${totalMeetingMinutes.toFixed(0)} mins scheduled)` : 'Not connected'}
 - Drive: ${connectedSources.drive ? `Connected (${documents.length} recent documents)` : 'Not connected'}
 
-## EMAILS (Last 24 hours)
+## EMAILS (Last 24 hours) - ${emails.length} total
 ${connectedSources.gmail ? JSON.stringify(emails.map((e) => ({
   from: e.sender,
   subject: e.subject,
-  snippet: e.snippet?.substring(0, 100),
+  snippet: e.snippet?.substring(0, 200),
   received: e.received_at,
   is_potentially_urgent: urgentEmails.includes(e),
 })), null, 2) : 'Gmail not connected'}
 
-## TODAY'S SCHEDULE
-${connectedSources.calendar ? JSON.stringify(events.filter((e) => isToday(e.start_time)).map((e) => ({
+## TODAY'S SCHEDULE - ${todayEvents.length} events
+${connectedSources.calendar ? JSON.stringify(todayEvents.map((e) => ({
   title: e.title,
+  description: e.description?.substring(0, 150) || null,
   start: e.start_time,
   end: e.end_time,
   location: e.location,
   attendees_count: e.attendees?.length || 0,
   has_conflict: e.has_conflict,
+  conflict_with: e.conflict_with || [],
 })), null, 2) : 'Calendar not connected'}
 
-## RECENT DOCUMENTS
-${connectedSources.drive ? JSON.stringify(documents.slice(0, 10).map((d) => ({
+## RECENT DOCUMENTS (Last 24 hours) - ${documents.length} total
+${connectedSources.drive ? JSON.stringify(documents.map((d) => ({
   name: d.name,
   type: d.mime_type,
   modified: d.modified_at,
 })), null, 2) : 'Drive not connected'}
 
+## ANALYSIS PRIORITIES
+1. **CONFLICTS** - Any scheduling conflicts must be addressed first
+2. **URGENT ITEMS** - Time-sensitive emails, imminent meetings
+3. **STRATEGIC ALIGNMENT** - ${hasOnboarding ? 'Items that align with user\'s stated goals and priorities' : 'Items that drive executive effectiveness'}
+4. **DELEGATION OPPORTUNITIES** - Tasks that can be handed off
+
 ## YOUR TASK
 Create a concise, actionable briefing. Focus on what matters most RIGHT NOW.
+${hasOnboarding ? 'Reference the user\'s specific goals, decision style, and blockers in your analysis.' : 'Apply universal executive best practices.'}
+
+## DATA SUMMARY (Use these exact counts in your response)
+- Total emails: ${emails.length}
+- Urgent emails: ${urgentEmails.length}
+- Today's meetings: ${todayEvents.length}
+- Total meeting hours today: ${(totalMeetingMinutes / 60).toFixed(1)}
+- Conflicts detected: ${conflictCount}
+- Documents updated: ${documents.length}
+${nextEvent ? `- Next meeting: "${nextEvent.title}" in ${minutesToNextEvent} minutes` : '- Next meeting: none scheduled'}
 
 Respond with ONLY valid JSON in this exact format:
 {
-  "executiveSummary": "2-3 sentence overview of what demands attention today",
+  "executiveSummary": "2-3 sentence overview - MUST mention conflicts if any exist, connect to user's strategic priorities",
+  "briefingScore": "0-100 integer based on day complexity (100=clear day, 0=overloaded with conflicts)",
+  "briefingVerdict": "CLEAR|MANAGEABLE|BUSY|OVERLOADED",
   "topPriority": {
-    "item": "The single most important thing",
-    "reason": "Why this is #1",
-    "suggestedAction": "Specific next step"
+    "item": "The single most important thing to focus on",
+    "reason": "Why this is #1 - reference user's goals if onboarding completed",
+    "suggestedAction": "Specific next step to take",
+    "alignsWithGoal": true
   },
   "urgentAttention": [
     {
       "type": "EMAIL|MEETING|DOCUMENT|CONFLICT",
-      "item": "Description",
-      "action": "What to do",
-      "deadline": "When (if applicable)"
+      "item": "Description of the urgent item",
+      "action": "What to do about it",
+      "deadline": "When it needs attention (if applicable)",
+      "priority": 1
     }
   ],
   "scheduleInsight": {
-    "meetingCount": 0,
-    "totalMeetingHours": 0.0,
-    "nextMeeting": "Title or null",
-    "minutesUntilNext": 0,
-    "conflicts": [],
-    "freeBlocks": ["Time ranges"]
+    "meetingCount": "integer - today's meeting count from DATA SUMMARY",
+    "totalMeetingHours": "number - from DATA SUMMARY",
+    "conflictCount": "integer - from DATA SUMMARY",
+    "nextMeeting": "string or null - next meeting title",
+    "minutesUntilNext": "integer or null - minutes until next meeting",
+    "freeBlocks": ["Time ranges with 30+ minutes free for focused work"],
+    "recommendation": "Brief schedule optimization advice"
   },
   "actionItems": [
     {
-      "task": "Specific task",
+      "task": "Specific actionable task",
       "source": "EMAIL|CALENDAR|DRIVE|ANALYSIS",
       "priority": "HIGH|MEDIUM|LOW",
       "canDelegate": true,
-      "delegateTo": "Role suggestion or null"
+      "delegateTo": "Role suggestion or null",
+      "estimatedMinutes": 15
     }
   ],
   "intelligence": {
-    "emailHighlights": ["Key email summaries"],
-    "documentActivity": ["Notable document changes"],
-    "patterns": ["Any patterns noticed"]
+    "emailHighlights": ["Key email summaries - max 3 most important"],
+    "documentActivity": ["Notable document changes - max 3"],
+    "patterns": ["Patterns noticed - communication trends, workload patterns"]
+  },
+  "personalizedInsights": ${hasOnboarding ? `[
+    {
+      "category": "GOAL_PROGRESS|BLOCKER_ALERT|ENERGY_TIP|DECISION_NEEDED",
+      "insight": "Observation directly tied to user's stated goals/blockers",
+      "recommendation": "Specific action to take"
+    }
+  ]` : 'null'},
+  "metrics": {
+    "emailsToProcess": "integer - from DATA SUMMARY",
+    "urgentEmailCount": "integer - from DATA SUMMARY",
+    "meetingsToday": "integer - from DATA SUMMARY",
+    "conflictsDetected": "integer - from DATA SUMMARY",
+    "documentsUpdated": "integer - from DATA SUMMARY"
   },
   "closingNote": "One sentence of strategic advice for the day"
-}`;
+}
+
+CRITICAL: Use the EXACT counts from DATA SUMMARY above for all numeric fields in metrics and scheduleInsight.`;
 }
 
 // ============================================================================
@@ -622,4 +696,55 @@ Respond with ONLY valid JSON in this exact format (no markdown code fences, no e
 - Be specific and actionable in recommendations
 - Use professional but accessible language
 - Return ONLY the JSON object, no additional text or formatting`;
+}
+
+// ============================================================================
+// Onboarding Reflection Generation Prompt
+// ============================================================================
+
+/**
+ * AI Reflection Generation Prompt
+ * Generates a personalized, natural acknowledgment of user's answer during onboarding.
+ */
+export function buildReflectionPrompt(
+  question: string,
+  userAnswer: string,
+  stepContext: string
+): string {
+  return `You are EmergentOS, a warm and professional AI assistant during onboarding.
+
+## CONTEXT
+The user is going through initial profile setup. You just asked them a question and they answered.
+
+Question asked: "${question}"
+User's answer: "${userAnswer}"
+Step context: ${stepContext}
+
+## YOUR TASK
+Generate a brief, natural acknowledgment (1-2 sentences max) that:
+1. Shows you understood their specific answer
+2. Feels conversational and warm, not robotic
+3. Naturally transitions to the next topic
+
+## TONE GUIDELINES
+- Be warm but professional
+- Sound like a thoughtful colleague, not a chatbot
+- Use their actual words or themes where natural
+- Never use em-dashes (—), use commas, periods, or colons instead
+- Keep it concise, don't over-explain
+
+## GOOD EXAMPLES
+- "Balancing growth and quality is a real challenge. I'll keep that tension in mind."
+- "Morning deep work is clearly important to you. I'll factor that in."
+- "Too many meetings, got it. We'll work on protecting your focus time."
+- "That makes sense. Having clear priorities before the week starts can be a game changer."
+
+## BAD EXAMPLES (avoid these patterns)
+- "Got it — sounds like that's a priority for you." (too generic, uses em-dash)
+- "Thank you for sharing that with me." (sounds robotic)
+- "I appreciate you telling me that." (too formal)
+- "Interesting! Let me process that." (sounds like AI)
+
+## OUTPUT
+Return ONLY the reflection text. No quotes, no labels, no formatting.`;
 }

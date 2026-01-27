@@ -4,13 +4,17 @@
  * POST /api/ai/briefing/generate
  * Generates a daily briefing for the authenticated user.
  * Per Section 16.6.
+ * 
+ * Enhanced with:
+ * - User profile personalization from onboarding
+ * - Structured output schema enforcement
  */
 
 import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { supabase } from '@/lib/supabase';
-import { callGeminiJSON, isGeminiConfigured } from '@/lib/llm/gemini';
-import { buildBriefingPrompt } from '@/lib/llm/prompts';
+import { callGeminiWithSchema, isGeminiConfigured, BRIEFING_SCHEMA } from '@/lib/llm/gemini';
+import { buildBriefingPrompt, type UserProfileContext } from '@/lib/llm/prompts';
 import { getCurrentUTCDate, daysAgoUTC, startOfDayUTC, endOfDayUTC } from '@/lib/time';
 
 export async function POST() {
@@ -120,13 +124,33 @@ export async function POST() {
       documents = data || [];
     }
 
-    // 6. Build prompt and call Gemini
-    const prompt = buildBriefingPrompt(emails, events, documents, connectedSources);
-    
-    console.log(`[Briefing] Generating briefing for user ${userId}`);
-    const responseText = await callGeminiJSON(prompt);
+    // 6. Fetch user profile for personalization (from onboarding)
+    // Require BOTH onboarding_answers AND ai_assessment for full personalization
+    let userProfile: UserProfileContext = { hasOnboarding: false };
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('onboarding_answers, ai_assessment')
+      .eq('user_id', userId)
+      .single();
 
-    // 7. Parse JSON response
+    // Full personalization requires completed onboarding (both fields populated)
+    const hasCompleteOnboarding = !!(profile?.onboarding_answers && profile?.ai_assessment);
+    
+    if (profile) {
+      userProfile = {
+        hasOnboarding: hasCompleteOnboarding,
+        answers: profile.onboarding_answers as UserProfileContext['answers'],
+        assessment: profile.ai_assessment as UserProfileContext['assessment'],
+      };
+    }
+
+    // 7. Build prompt and call Gemini with schema enforcement
+    const prompt = buildBriefingPrompt(emails, events, documents, connectedSources, userProfile);
+    
+    console.log(`[Briefing] Generating briefing for user ${userId}, personalized: ${userProfile.hasOnboarding}`);
+    const responseText = await callGeminiWithSchema(prompt, BRIEFING_SCHEMA);
+
+    // 8. Parse JSON response (schema enforced, but validate anyway)
     let content: Record<string, unknown>;
     try {
       content = JSON.parse(responseText);
@@ -138,7 +162,7 @@ export async function POST() {
       );
     }
 
-    // 8. UPSERT into briefings table
+    // 9. UPSERT into briefings table
     const { data: briefing, error: upsertError } = await supabase
       .from('briefings')
       .upsert(

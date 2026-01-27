@@ -13,11 +13,11 @@ import type { ConversationStep, DynamicQuestion, StepConfig } from './types';
 
 export const ONBOARDING_SCRIPT = {
   intro: {
-    greeting: "Hello, and welcome to EmergentOS — your personal operating system.",
-    followUp: "I'm here to ask you a few quick questions to personalise your experience. You can type your answers — whatever feels easiest for you.",
+    greeting: "Hello, and welcome to EmergentOS, your personal operating system.",
+    followUp: "I'm here to ask you a few quick questions to personalise your experience. Just type your answers, whatever feels natural.",
     primers: [
-      "This won't take long — the more you share, the more helpful I can be.",
-      "We'll keep things light — just enough to understand what matters to you.",
+      "This won't take long. The more you share, the more helpful I can be.",
+      "We'll keep things light, just enough to understand what matters to you.",
       "Think of this as setting the foundations so I can support you properly."
     ]
   },
@@ -27,10 +27,10 @@ export const ONBOARDING_SCRIPT = {
       section: 1,
       sectionTitle: "Where You're At + What Drives You",
       sectionIntro: "Let's start with where you're at, and what's important to you right now.",
-      question: "First up — what's something you're currently working toward that really matters to you?",
+      question: "First up: what's something you're currently working toward that really matters to you?",
       hint: "This helps me understand what you're optimising for.",
-      reflections: [
-        "Got it — sounds like that's a top priority for you.",
+      fallbackReflections: [
+        "Got it, that's clearly a priority for you.",
         "That gives me a clear sense of what's driving you."
       ]
     },
@@ -38,56 +38,56 @@ export const ONBOARDING_SCRIPT = {
       section: 1,
       question: "How do you usually make decisions? More instinctively, or after gathering lots of input?",
       hint: "This guides how I present options and recommendations.",
-      reflections: [
-        "Helpful — I'll lean into that style.",
-        "Good to know — that shapes how I support you."
+      fallbackReflections: [
+        "That's helpful. I'll lean into that style.",
+        "Good to know, that shapes how I support you."
       ]
     },
     flow: {
       section: 1,
-      question: "When do you feel most in flow — like you're at your best?",
+      question: "When do you feel most in flow? Like you're at your best?",
       hint: "This helps me match your natural rhythm.",
-      reflections: [
-        "Great — I'll keep that in mind.",
-        "Flow triggers are incredibly powerful — thank you."
+      fallbackReflections: [
+        "Great, I'll keep that in mind.",
+        "Flow triggers are powerful. Thank you for sharing."
       ]
     },
     blockers: {
       section: 2,
       sectionTitle: "Friction + Support",
-      sectionIntro: "Now let's look at what gets in your way — and where I can help most.",
+      sectionIntro: "Now let's look at what gets in your way, and where I can help most.",
       question: "What's something that often slows you down or knocks you off-track?",
       hint: "This helps me anticipate friction before it builds.",
-      reflections: [
-        "Noted — I'll help you stay ahead of that.",
-        "That's really useful."
+      fallbackReflections: [
+        "Noted. I'll help you stay ahead of that.",
+        "That's really useful to know."
       ]
     },
     immediate: {
       section: 2,
       question: "If I could help with just one thing right now, what would it be?",
       hint: "This shows me where to focus first.",
-      reflections: [
-        "Perfect — I'll start there.",
-        "Got it — I'll keep that front and centre."
+      fallbackReflections: [
+        "Perfect. I'll start there.",
+        "Got it. I'll keep that front and centre."
       ]
     },
     context1: {
       section: 3,
       sectionTitle: "Context Expansion",
-      sectionIntro: "Great — just two quick questions to round things out.",
+      sectionIntro: "Great. Just two quick questions to round things out.",
       isDynamic: true,
-      reflections: [
-        "Thanks — that rounds things out nicely.",
-        "Good to know — that helps complete the picture."
+      fallbackReflections: [
+        "Thanks, that rounds things out nicely.",
+        "Good to know. That helps complete the picture."
       ]
     },
     context2: {
       section: 3,
       isDynamic: true,
-      reflections: [
-        "Thanks — that rounds things out nicely.",
-        "Good to know — that helps complete the picture."
+      fallbackReflections: [
+        "Thanks, that rounds things out nicely.",
+        "Good to know. That helps complete the picture."
       ]
     }
   } as Record<ConversationStep, StepConfig>,
@@ -126,7 +126,7 @@ export const ONBOARDING_SCRIPT = {
   ] as DynamicQuestion[],
   
   wrapUp: {
-    thanks: "Thanks — that gives me a strong foundation to start supporting you.",
+    thanks: "Thanks. That gives me a strong foundation to start supporting you.",
     completion: "You've now completed Level 1 Profiling inside EmergentOS.",
     closingLines: [
       "From here, your system will start adapting around you.",
@@ -236,11 +236,11 @@ export function getQuestionForStep(
 }
 
 /**
- * Get a random reflection for a step
+ * Get a random fallback reflection for a step (used when AI generation fails)
  */
-export function getReflectionForStep(step: ConversationStep): string {
+export function getFallbackReflection(step: ConversationStep): string {
   const stepConfig = ONBOARDING_SCRIPT.steps[step];
-  const reflections = stepConfig.reflections;
+  const reflections = stepConfig.fallbackReflections;
   return reflections[Math.floor(Math.random() * reflections.length)];
 }
 

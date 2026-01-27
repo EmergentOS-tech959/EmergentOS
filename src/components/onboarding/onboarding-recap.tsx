@@ -34,11 +34,12 @@ export function OnboardingRecap({
 
   return (
     <div className={cn(
-      'flex flex-col items-center justify-center',
-      'px-4 py-8 max-w-2xl mx-auto',
+      'flex flex-col items-center',
+      'max-w-2xl mx-auto',
       className
     )}>
-      <div className="flex items-center gap-3 mb-6">
+      {/* Header - fixed height */}
+      <div className="flex items-center gap-3 mb-4 shrink-0">
         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-500/20 to-teal-600/20 flex items-center justify-center">
           <Sparkles className="h-5 w-5 text-teal-400" />
         </div>
@@ -52,12 +53,14 @@ export function OnboardingRecap({
         </div>
       </div>
 
+      {/* Recap text box - this is the only scrollable area */}
       <div className={cn(
         'w-full rounded-2xl',
         'bg-secondary/30 border border-border/50',
-        'relative flex flex-col max-h-[60vh]'
+        'relative flex flex-col',
+        'max-h-[calc(100vh-320px)]' // Account for logo, header, buttons, footer
       )}>
-        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-teal-500/50 via-sky-500/50 to-teal-500/50 z-10" />
+        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-teal-500/50 via-sky-500/50 to-teal-500/50 z-10 rounded-t-2xl" />
         <div className="p-6 overflow-y-auto eos-scrollbar-thin">
         <div className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">
           {recap}
@@ -65,7 +68,8 @@ export function OnboardingRecap({
           </div>
       </div>
 
-      <div className="flex items-center gap-3 mt-6">
+      {/* Buttons - fixed height */}
+      <div className="flex items-center gap-3 mt-5 shrink-0">
         <Button
           variant="outline"
           size="sm"
@@ -96,7 +100,8 @@ export function OnboardingRecap({
         </Button>
       </div>
 
-      <p className="text-xs text-muted-foreground mt-4 text-center max-w-md">
+      {/* Helper text - fixed height */}
+      <p className="text-xs text-muted-foreground mt-3 text-center max-w-md shrink-0">
         If something does not quite fit, click Start Over to begin again. Otherwise, confirm to continue.
       </p>
     </div>

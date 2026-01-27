@@ -39,7 +39,7 @@ export interface StepConfig {
   question?: string;
   hint?: string;
   isDynamic?: boolean;
-  reflections: string[];
+  fallbackReflections: string[];
 }
 
 export interface ContextAnswer {

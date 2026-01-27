@@ -25,12 +25,17 @@ export function OnboardingChat({ messages, isTyping, activeTypingMessageId, onTy
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new messages arrive
-  useEffect(() => {
+  // Scroll to bottom function - can be called by children during typing
+  const scrollToBottom = useCallback(() => {
     if (bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
-  }, [messages, isTyping]);
+  }, []);
+
+  // Auto-scroll to bottom when new messages arrive or typing state changes
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isTyping, scrollToBottom]);
 
   return (
     <div 
@@ -51,6 +56,7 @@ export function OnboardingChat({ messages, isTyping, activeTypingMessageId, onTy
               message={message} 
               isActivelyTyping={message.id === activeTypingMessageId}
               onTypingComplete={onTypingComplete}
+              onContentGrow={scrollToBottom}
             />
           ))}
           
@@ -86,11 +92,13 @@ export function OnboardingChat({ messages, isTyping, activeTypingMessageId, onTy
 function ChatMessage({ 
   message, 
   isActivelyTyping,
-  onTypingComplete 
+  onTypingComplete,
+  onContentGrow
 }: { 
   message: OnboardingMessage;
   isActivelyTyping?: boolean;
   onTypingComplete?: (messageId: string) => void;
+  onContentGrow?: () => void;
 }) {
   const isAssistant = message.role === 'assistant';
   
@@ -103,6 +111,7 @@ function ChatMessage({
   );
   const [isTypingEffect, setIsTypingEffect] = useState(shouldType);
   const hasCompletedRef = useRef(false);
+  const lastScrollRef = useRef(0);
 
   useEffect(() => {
     // If not supposed to type, show full content immediately
@@ -114,6 +123,7 @@ function ChatMessage({
 
     // Reset for new typing session
     hasCompletedRef.current = false;
+    lastScrollRef.current = 0;
     setDisplayedContent('');
     setIsTypingEffect(true);
 
@@ -122,10 +132,21 @@ function ChatMessage({
     const interval = setInterval(() => {
       if (currentIndex <= content.length) {
         setDisplayedContent(content.slice(0, currentIndex));
+        
+        // Scroll periodically during typing (every ~20 characters or on newlines)
+        if (onContentGrow && (currentIndex - lastScrollRef.current > 20 || content[currentIndex - 1] === '\n')) {
+          lastScrollRef.current = currentIndex;
+          onContentGrow();
+        }
+        
         currentIndex++;
       } else {
         setIsTypingEffect(false);
         clearInterval(interval);
+        // Final scroll after typing completes
+        if (onContentGrow) {
+          onContentGrow();
+        }
         // Signal completion to parent
         if (!hasCompletedRef.current && onTypingComplete) {
           hasCompletedRef.current = true;
@@ -135,7 +156,7 @@ function ChatMessage({
     }, 15); // Typing speed
 
     return () => clearInterval(interval);
-  }, [shouldType, message.content, message.id, onTypingComplete]);
+  }, [shouldType, message.content, message.id, onTypingComplete, onContentGrow]);
 
   return (
     <div className={cn(

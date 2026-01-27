@@ -30,8 +30,11 @@ import {
   Lightbulb,
   Brain,
   Activity,
+  Info,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { formatTimeBlock } from '@/lib/time';
 
 // ============================================================================
 // Types - Enhanced for Structured Output (Section 9.3)
@@ -170,21 +173,19 @@ export function SuggestionsModal({ isOpen, onClose, insight }: SuggestionsModalP
               <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-gradient-to-br from-violet-500/25 to-purple-500/15 border border-violet-500/30 text-violet-500 shadow-lg shadow-violet-500/10">
                 <Brain className="w-5 h-5" />
               </div>
-              <div>
-                <div className="flex items-center gap-2.5">
-                  <DialogTitle className="text-xl font-semibold tracking-tight text-foreground">
+              <div className="flex items-center gap-2.5">
+                <DialogTitle className="text-xl font-semibold tracking-tight text-foreground">
                   Calendar Analysis
                 </DialogTitle>
-                  {verdictStyle && (
-                    <span className={cn(
-                      'text-[10px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider',
-                      verdictStyle.bg,
-                      verdictStyle.color
-                    )}>
-                      {verdict}
-                    </span>
-                  )}
-                </div>
+                {verdictStyle && (
+                  <span className={cn(
+                    'text-[10px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider',
+                    verdictStyle.bg,
+                    verdictStyle.color
+                  )}>
+                    {verdict}
+                  </span>
+                )}
               </div>
             </div>
             {/* Close Button */}
@@ -207,14 +208,21 @@ export function SuggestionsModal({ isOpen, onClose, insight }: SuggestionsModalP
             <>
               {/* Metrics Overview */}
               <div className="bg-card/80 rounded-2xl border border-border/50 shadow-lg p-1.5">
-              <MetricsOverview 
-                metrics={metrics} 
-                weeklyInsights={weeklyInsights}
-                healthScore={healthScore}
-                scoreColor={scoreColor}
-                meetingLoadColor={meetingLoadColor}
-                conflictsCount={insight?.conflictsCount ?? 0}
-              />
+                <MetricsOverview 
+                  metrics={metrics} 
+                  weeklyInsights={weeklyInsights}
+                  healthScore={healthScore}
+                  scoreColor={scoreColor}
+                  meetingLoadColor={meetingLoadColor}
+                  conflictsCount={insight?.conflictsCount ?? 0}
+                />
+                {/* Analysis Period Info */}
+                <div className="px-4 py-2.5 border-t border-border/30 bg-secondary/30 rounded-b-xl">
+                  <p className="text-[11px] text-muted-foreground text-center">
+                    <span className="text-violet-400/80 font-medium">Analysis period:</span>{' '}
+                    Next 7 days • Focus on this week&apos;s schedule
+                  </p>
+                </div>
               </div>
 
               {/* Executive Summary */}
@@ -344,7 +352,31 @@ function MetricsOverview({
           ? 'border-amber-500/20 bg-amber-500/5'
           : 'border-red-500/20 bg-red-500/5'
       )}>
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Health Score</p>
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Health Score</p>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button type="button" className="flex items-center justify-center w-4 h-4 rounded-full bg-muted/50 hover:bg-muted text-muted-foreground/70 hover:text-muted-foreground transition-colors">
+                <Info className="w-3 h-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent 
+              side="right" 
+              sideOffset={8}
+              className="max-w-[260px] p-3 bg-popover border border-border/50 shadow-xl"
+            >
+              <p className="text-xs font-semibold text-foreground mb-2">Score Calculation</p>
+              <div className="space-y-1 text-[11px] text-muted-foreground">
+                <p><span className="text-red-400">−15</span> per conflict</p>
+                <p><span className="text-amber-400">−</span> back-to-back meetings</p>
+                <p><span className="text-emerald-400">+</span> available focus time</p>
+              </div>
+              <div className="mt-2 pt-2 border-t border-border/30 text-[10px] text-muted-foreground/70">
+                80+ Optimal • 60-79 Good • 40-59 Caution • &lt;40 Critical
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        </div>
         <p className={cn('text-3xl font-bold tracking-tight mt-1', scoreColor)}>
           {healthScore}<span className="text-sm font-medium text-muted-foreground/60 ml-1">/100</span>
         </p>
@@ -419,7 +451,7 @@ function UrgentActionsSection({ actions }: { actions: UrgentAction[] }) {
                 <div className="flex items-center gap-2 mt-3">
                   <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-secondary text-muted-foreground text-[10px] font-medium">
                     <Clock className="w-3 h-3" />
-                    <span>{action.timeframe}</span>
+                  <span>{action.timeframe}</span>
                   </div>
                 </div>
               </div>
@@ -480,7 +512,7 @@ function ConflictResolutionsSection({ conflicts }: { conflicts: ConflictResoluti
                       {isMove && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground font-semibold">
                           MOVE
-                        </span>
+                </span>
                       )}
                     </div>
                   </div>
@@ -559,8 +591,8 @@ function FocusTimeSection({ protection }: { protection: FocusTimeProtection }) {
             <p className="text-xs font-medium text-foreground mb-2">Suggested blocks to protect:</p>
             <div className="flex flex-wrap gap-2">
               {protection.suggestedBlocks.map((block, i) => (
-                <span key={i} className="text-xs px-2.5 py-1 rounded-md bg-secondary text-foreground font-medium border border-border">
-                  {block}
+                <span key={i} className="text-xs px-2.5 py-1 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium border border-emerald-500/20">
+                  {formatTimeBlock(block)}
                 </span>
               ))}
             </div>

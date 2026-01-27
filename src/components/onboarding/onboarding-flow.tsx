@@ -23,7 +23,7 @@ import {
   ONBOARDING_SCRIPT,
   getNextStep,
   getQuestionForStep,
-  getReflectionForStep,
+  getFallbackReflection,
   getRandomPrimer,
   getRandomClosingLine,
   getStepIndex,
@@ -31,10 +31,45 @@ import {
   selectDynamicQuestions,
 } from '@/lib/onboarding/script';
 
+import type { ConversationStep } from '@/lib/onboarding/types';
+
 import type { OnboardingMessage, OnboardingAnswers } from '@/lib/onboarding/types';
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Generate AI-powered reflection with fallback to static text
+ */
+async function generateReflection(
+  step: ConversationStep,
+  question: string,
+  answer: string
+): Promise<string> {
+  try {
+    const response = await fetch('/api/onboarding/reflect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        answer,
+        stepContext: step,
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data.reflection) {
+        return data.reflection;
+      }
+    }
+  } catch (error) {
+    console.warn('[OnboardingFlow] AI reflection failed, using fallback:', error);
+  }
+
+  // Fallback to static reflection
+  return getFallbackReflection(step);
 }
 
 function ProgressIndicator({ current, total }: { current: number; total: number }) {
@@ -291,13 +326,19 @@ export function OnboardingFlow() {
     }
 
     const nextStep = getNextStep(currentStep);
+    
+    // Get the question that was asked for this step (for AI reflection context)
+    const currentQuestion = getQuestionForStep(currentStep, answers);
 
     if (!nextStep) {
       setTyping(true);
-      await delay(800);
+      
+      // Generate AI reflection while showing typing indicator
+      const reflection = await generateReflection(currentStep, currentQuestion, message);
+
+      await delay(300); // Brief pause after getting reflection
       setTyping(false);
 
-      const reflection = getReflectionForStep(currentStep);
       const transitionMsg: OnboardingMessage = {
         id: `msg-transition-${Date.now()}`,
         role: 'assistant',
@@ -316,10 +357,14 @@ export function OnboardingFlow() {
     }
 
     setTyping(true);
-    await delay(1200);
+    
+    // Generate AI reflection while showing typing indicator
+    const reflection = await generateReflection(currentStep, currentQuestion, message);
+
+    await delay(300); // Brief pause after getting reflection
     setTyping(false);
 
-    let responseContent = getReflectionForStep(currentStep);
+    let responseContent = reflection;
     
     const nextStepConfig = ONBOARDING_SCRIPT.steps[nextStep];
     if (nextStepConfig.sectionTitle && nextStepConfig.sectionIntro) {
@@ -406,20 +451,20 @@ export function OnboardingFlow() {
   if (state.phase === 'recap' && state.recapContent) {
     return (
       <div className="flex flex-col h-screen overflow-hidden">
-        <div className="py-8 flex justify-center shrink-0">
+        <div className="py-6 flex justify-center shrink-0">
           <OnboardingLogo />
         </div>
         
-        <div className="flex-1 flex items-center min-h-0 overflow-y-auto">
+        <div className="flex-1 flex items-center justify-center min-h-0 px-4">
           <OnboardingRecap
             recap={state.recapContent}
             onConfirm={handleRecapConfirm}
             onRestart={handleRestart}
-            className="w-full my-auto"
+            className="w-full"
           />
         </div>
 
-        <div className="p-4 flex justify-center shrink-0">
+        <div className="py-4 flex justify-center shrink-0">
           <button
             onClick={handleSkip}
             className="text-sm text-muted-foreground/60 hover:text-muted-foreground transition-colors"

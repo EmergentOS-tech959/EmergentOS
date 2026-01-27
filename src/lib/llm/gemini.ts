@@ -203,6 +203,161 @@ export const CALENDAR_ANALYSIS_SCHEMA: Schema = {
   ],
 };
 
+// ============================================================================
+// Daily Briefing Schema (Structured Output)
+// ============================================================================
+
+/**
+ * JSON Schema for Daily Briefing output
+ * Ensures Gemini returns structured, validated JSON for briefings
+ */
+export const BRIEFING_SCHEMA: Schema = {
+  type: SchemaType.OBJECT,
+  properties: {
+    executiveSummary: {
+      type: SchemaType.STRING,
+      description: '2-3 sentence overview - MUST mention conflicts if any, connect to strategic priorities',
+    },
+    briefingScore: {
+      type: SchemaType.INTEGER,
+      description: 'Day readiness score from 0-100',
+    },
+    briefingVerdict: {
+      type: SchemaType.STRING,
+      enum: ['CLEAR', 'MANAGEABLE', 'BUSY', 'OVERLOADED'],
+    },
+    topPriority: {
+      type: SchemaType.OBJECT,
+      properties: {
+        item: { type: SchemaType.STRING, description: 'The single most important thing' },
+        reason: { type: SchemaType.STRING, description: 'Why this is #1' },
+        suggestedAction: { type: SchemaType.STRING, description: 'Specific next step' },
+        alignsWithGoal: { type: SchemaType.BOOLEAN, description: 'Whether this aligns with user stated goals' },
+      },
+      required: ['item', 'reason', 'suggestedAction'],
+    },
+    urgentAttention: {
+      type: SchemaType.ARRAY,
+      items: {
+        type: SchemaType.OBJECT,
+        properties: {
+          type: { 
+            type: SchemaType.STRING, 
+            enum: ['EMAIL', 'MEETING', 'DOCUMENT', 'CONFLICT'],
+          },
+          item: { type: SchemaType.STRING, description: 'Description of urgent item' },
+          action: { type: SchemaType.STRING, description: 'What to do' },
+          deadline: { type: SchemaType.STRING, description: 'When, if applicable', nullable: true },
+          priority: { type: SchemaType.INTEGER, description: 'Priority ranking (1 = highest)' },
+        },
+        required: ['type', 'item', 'action', 'priority'],
+      },
+    },
+    scheduleInsight: {
+      type: SchemaType.OBJECT,
+      properties: {
+        meetingCount: { type: SchemaType.INTEGER, description: 'Number of meetings today' },
+        totalMeetingHours: { type: SchemaType.NUMBER, description: 'Total hours in meetings today' },
+        conflictCount: { type: SchemaType.INTEGER, description: 'Number of scheduling conflicts' },
+        nextMeeting: { type: SchemaType.STRING, nullable: true, description: 'Title of next meeting or null' },
+        minutesUntilNext: { type: SchemaType.INTEGER, nullable: true, description: 'Minutes until next meeting or null' },
+        freeBlocks: {
+          type: SchemaType.ARRAY,
+          items: { type: SchemaType.STRING },
+          description: 'Time ranges with 30+ minutes free',
+        },
+        recommendation: { type: SchemaType.STRING, description: 'Brief schedule optimization advice' },
+      },
+      required: ['meetingCount', 'totalMeetingHours', 'conflictCount', 'recommendation', 'freeBlocks'],
+    },
+    actionItems: {
+      type: SchemaType.ARRAY,
+      items: {
+        type: SchemaType.OBJECT,
+        properties: {
+          task: { type: SchemaType.STRING },
+          source: { 
+            type: SchemaType.STRING,
+            enum: ['EMAIL', 'CALENDAR', 'DRIVE', 'ANALYSIS'],
+          },
+          priority: {
+            type: SchemaType.STRING,
+            enum: ['HIGH', 'MEDIUM', 'LOW'],
+          },
+          canDelegate: { type: SchemaType.BOOLEAN },
+          delegateTo: { type: SchemaType.STRING, nullable: true },
+          estimatedMinutes: { type: SchemaType.INTEGER, nullable: true },
+        },
+        required: ['task', 'source', 'priority'],
+      },
+    },
+    intelligence: {
+      type: SchemaType.OBJECT,
+      properties: {
+        emailHighlights: {
+          type: SchemaType.ARRAY,
+          items: { type: SchemaType.STRING },
+          description: 'Key email summaries - max 3 most important',
+        },
+        documentActivity: {
+          type: SchemaType.ARRAY,
+          items: { type: SchemaType.STRING },
+          description: 'Notable document changes - max 3',
+        },
+        patterns: {
+          type: SchemaType.ARRAY,
+          items: { type: SchemaType.STRING },
+          description: 'Patterns noticed in communication or workload',
+        },
+      },
+      required: ['emailHighlights', 'documentActivity', 'patterns'],
+    },
+    personalizedInsights: {
+      type: SchemaType.ARRAY,
+      nullable: true,
+      items: {
+        type: SchemaType.OBJECT,
+        properties: {
+          category: {
+            type: SchemaType.STRING,
+            enum: ['GOAL_PROGRESS', 'BLOCKER_ALERT', 'ENERGY_TIP', 'DECISION_NEEDED'],
+          },
+          insight: { type: SchemaType.STRING },
+          recommendation: { type: SchemaType.STRING },
+        },
+        required: ['category', 'insight', 'recommendation'],
+      },
+    },
+    metrics: {
+      type: SchemaType.OBJECT,
+      properties: {
+        emailsToProcess: { type: SchemaType.INTEGER },
+        urgentEmailCount: { type: SchemaType.INTEGER },
+        meetingsToday: { type: SchemaType.INTEGER },
+        conflictsDetected: { type: SchemaType.INTEGER },
+        documentsUpdated: { type: SchemaType.INTEGER },
+      },
+      required: ['emailsToProcess', 'meetingsToday', 'conflictsDetected'],
+    },
+    closingNote: {
+      type: SchemaType.STRING,
+      description: 'One sentence of strategic advice',
+    },
+  },
+  required: [
+    'executiveSummary',
+    'briefingScore',
+    'briefingVerdict',
+    'topPriority',
+    'urgentAttention',
+    'scheduleInsight',
+    'actionItems',
+    'intelligence',
+    'metrics',
+    'closingNote',
+  ],
+};
+
 /**
  * Call Gemini for structured JSON responses (briefing, analysis)
  */

@@ -236,32 +236,17 @@ export function ScheduleWidget() {
             <h3 className="text-lg font-semibold tracking-tight text-foreground">Today&apos;s Schedule</h3>
           </div>
           
-          {/* Action Buttons - Icon only */}
+          {/* Action Button - Clear text label */}
           {isConnected && (
-            <div className="flex items-center gap-1">
-              {/* AI Analysis Button - Icon only */}
-              {insight && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setIsInsightsModalOpen(true)}
-                  className="w-8 h-8 text-violet-500 hover:text-violet-600 hover:bg-violet-500/10 transition-colors"
-                  title="View AI Analysis"
-                >
-                  <Brain className="w-4 h-4" />
-                </Button>
-              )}
-              {/* Calendar View Button */}
             <Button
               variant="ghost"
-                size="icon"
-                onClick={() => setIsCalendarModalOpen(true)}
-                className="w-8 h-8 text-muted-foreground transition-colors hover:text-foreground hover:bg-secondary/50"
-                title="Open Calendar View"
-              >
-                <CalendarDays className="w-4 h-4" />
-              </Button>
-            </div>
+              size="sm"
+              onClick={() => setIsCalendarModalOpen(true)}
+              className="h-8 px-3 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
+            >
+              <CalendarDays className="w-3.5 h-3.5 mr-1.5" />
+              Calendar
+            </Button>
           )}
         </div>
 
@@ -385,7 +370,7 @@ export function ScheduleWidget() {
           ) : error ? (
             <ErrorState message={error} onRetry={fetchEvents} />
           ) : events.length === 0 ? (
-            <EmptyState hasInsight={!!insight} onViewInsights={() => setIsInsightsModalOpen(true)} />
+            <EmptyState />
           ) : (
             <div className="pb-4 space-y-1.5">
               {/* Upcoming Events */}
@@ -626,20 +611,14 @@ function ErrorState({ message, onRetry }: { message?: string; onRetry?: () => vo
   );
 }
 
-function EmptyState({ hasInsight, onViewInsights }: { hasInsight: boolean; onViewInsights: () => void }) {
+function EmptyState() {
   return (
           <div className="flex flex-col items-center justify-center h-full text-center py-6">
             <div className="w-14 h-14 rounded-2xl bg-secondary/50 flex items-center justify-center mb-4">
               <Calendar className="h-7 w-7 text-muted-foreground/50" />
             </div>
             <p className="text-sm font-medium text-foreground mb-1">No Events Today</p>
-      <p className="text-xs text-muted-foreground mb-4">Your schedule is clear</p>
-      {hasInsight && (
-        <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={onViewInsights}>
-          <Brain className="h-3 w-3 text-violet-500" />
-          View Weekly Analysis
-        </Button>
-        )}
+      <p className="text-xs text-muted-foreground">Your schedule is clear</p>
       </div>
   );
 }

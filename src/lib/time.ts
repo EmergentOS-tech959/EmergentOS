@@ -138,3 +138,102 @@ export function msUntilNextTenMinuteMark(): number {
   
   return msUntilNext > 0 ? msUntilNext : 600000; // 10 min fallback
 }
+
+/**
+ * Format a time block string into human-readable format
+ * Input: "2026-01-27T09:00:00.000Z - 2026-01-27T11:00:00.000Z" or "2026-01-27T09:00:00.000Z"
+ * Output: "Mon 9-11am" or "Jan 27 • 9am-11am"
+ */
+export function formatTimeBlock(block: string): string {
+  // Check if it's a range (contains " - ")
+  if (block.includes(' - ')) {
+    const [startStr, endStr] = block.split(' - ');
+    return formatTimeRange(startStr, endStr);
+  }
+  
+  // Single timestamp - just format as time
+  try {
+    const date = new Date(block);
+    if (isNaN(date.getTime())) return block; // Return original if invalid
+    return formatSingleTime(date);
+  } catch {
+    return block;
+  }
+}
+
+/**
+ * Format a time range into human-readable format
+ */
+function formatTimeRange(startStr: string, endStr: string): string {
+  try {
+    const start = new Date(startStr);
+    const end = new Date(endStr);
+    
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      return `${startStr} - ${endStr}`; // Return original if invalid
+    }
+    
+    const now = new Date();
+    const startHour = start.getUTCHours();
+    const endHour = end.getUTCHours();
+    
+    // Format times
+    const startTime = formatHour(startHour);
+    const endTime = formatHour(endHour);
+    const timeRange = `${startTime}-${endTime}`;
+    
+    // Check if it's today
+    if (isSameDay(start, now)) {
+      return `Today ${timeRange}`;
+    }
+    
+    // Check if it's tomorrow
+    const tomorrow = new Date(now);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    if (isSameDay(start, tomorrow)) {
+      return `Tomorrow ${timeRange}`;
+    }
+    
+    // Check if it's within this week - show day name
+    const daysDiff = Math.floor((start.getTime() - now.getTime()) / 86400000);
+    if (daysDiff >= 0 && daysDiff < 7) {
+      const dayName = start.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+      return `${dayName} ${timeRange}`;
+    }
+    
+    // Otherwise show month and day
+    const monthDay = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    return `${monthDay} • ${timeRange}`;
+  } catch {
+    return `${startStr} - ${endStr}`;
+  }
+}
+
+/**
+ * Format a single time
+ */
+function formatSingleTime(date: Date): string {
+  const hour = date.getUTCHours();
+  return formatHour(hour);
+}
+
+/**
+ * Format hour to am/pm format
+ */
+function formatHour(hour: number): string {
+  if (hour === 0) return '12am';
+  if (hour === 12) return '12pm';
+  if (hour < 12) return `${hour}am`;
+  return `${hour - 12}pm`;
+}
+
+/**
+ * Check if two dates are the same day (UTC)
+ */
+function isSameDay(date1: Date, date2: Date): boolean {
+  return (
+    date1.getUTCFullYear() === date2.getUTCFullYear() &&
+    date1.getUTCMonth() === date2.getUTCMonth() &&
+    date1.getUTCDate() === date2.getUTCDate()
+  );
+}

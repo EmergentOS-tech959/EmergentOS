@@ -365,15 +365,25 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
 
   /**
    * Generate briefing
+   * CRITICAL: This updates the generated_at timestamp in the database
    */
   const generateBriefing = useCallback(async (): Promise<boolean> => {
+    console.log('[SyncManager] Starting briefing generation...');
     try {
       const response = await fetch('/api/ai/briefing/generate', {
         method: 'POST',
       });
-      return response.ok;
+      
+      if (response.ok) {
+        console.log('[SyncManager] Briefing generation succeeded');
+        return true;
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('[SyncManager] Briefing generation failed with status:', response.status, errorData);
+        return false;
+      }
     } catch (error) {
-      console.error('[SyncManager] Briefing generation failed:', error);
+      console.error('[SyncManager] Briefing generation error:', error);
       return false;
     }
   }, []);
@@ -429,10 +439,15 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       // Check for data/time changes
       let anyDataChanged = false;
       let anyTimeChanged = false;
+      let calendarTimeChanged = false;
 
       for (const result of results) {
         if (result.dataChanged) anyDataChanged = true;
         if (result.timeChanged) anyTimeChanged = true;
+        // Track calendar-specific timeChanged for analysis coordination
+        if (result.provider === 'calendar' && result.timeChanged) {
+          calendarTimeChanged = true;
+        }
       }
 
       // CRITICAL: Clear providers from persistent ref BEFORE fetching connections
@@ -455,6 +470,8 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       });
 
       // Determine if briefing should be regenerated (Per Section 4.2)
+      // ALWAYS regenerate for: manual, date_boundary, connect triggers
+      // OR if any data/time changed during sync
       const shouldRegenerate = 
         request.trigger === 'manual' ||
         request.trigger === 'date_boundary' ||
@@ -462,9 +479,32 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
         anyDataChanged ||
         anyTimeChanged;
 
+      console.log('[SyncManager] Regeneration check:', {
+        trigger: request.trigger,
+        anyDataChanged,
+        anyTimeChanged,
+        shouldRegenerate,
+      });
+
       let briefingRegenerated = false;
       if (shouldRegenerate) {
+        // CRITICAL FIX: If briefing regenerates but calendar analysis didn't run
+        // (because calendar's timeChanged was false but other providers had changes),
+        // we need to trigger calendar reanalysis to keep insights in sync with briefing.
+        const calendarConnected = request.providers.includes('calendar') || 
+          providers.calendar.status === 'connected';
+        
+        if (calendarConnected && !calendarTimeChanged && (anyDataChanged || anyTimeChanged)) {
+          console.log('[SyncManager] Triggering calendar reanalysis (briefing will regenerate but calendar analysis was skipped)');
+          try {
+            await fetch('/api/calendar/insights', { method: 'POST' });
+          } catch (err) {
+            console.error('[SyncManager] Calendar reanalysis failed:', err);
+          }
+        }
+
         briefingRegenerated = await generateBriefing();
+        console.log('[SyncManager] Briefing regeneration result:', briefingRegenerated);
       }
 
       // Dispatch complete event
@@ -735,15 +775,21 @@ export function SyncManagerProvider({ children }: { children: React.ReactNode })
       [provider]: { status: 'disconnected', lastSyncAt: null, isSyncing: false },
     }));
 
+    // CRITICAL: Regenerate briefing after disconnect because data sources changed
+    // The briefing should reflect that this provider's data is no longer available
+    console.log(`[SyncManager] Provider ${provider} disconnected, regenerating briefing...`);
+    const briefingRegenerated = await generateBriefing();
+    console.log(`[SyncManager] Briefing regeneration after disconnect: ${briefingRegenerated}`);
+
     // Dispatch event
     dispatchConnectionsUpdated({
       providers: [provider],
       trigger: 'disconnect',
       dataChanged: true,
-      briefingRegenerated: true,
+      briefingRegenerated,
       phase: 'complete',
     });
-  }, [dispatchConnectionsUpdated]);
+  }, [dispatchConnectionsUpdated, generateBriefing]);
 
   // ============================================================================
   // Effects
